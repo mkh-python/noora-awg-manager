@@ -22,6 +22,7 @@ require_root() {
 }
 
 install_deps() {
+  export DEBIAN_FRONTEND=noninteractive
   apt update
   apt install -y \
     curl wget git python3-venv python3-pip qrencode sqlite3 \
@@ -131,12 +132,119 @@ stop_manager_services() {
   systemctl stop awg-full-backup.service 2>/dev/null || true
 }
 
+
+detect_main_iface() {
+  ip route get 1.1.1.1 2>/dev/null | awk '
+    {
+      for (i=1;i<=NF;i++) {
+        if ($i=="dev") {
+          print $(i+1)
+          exit
+        }
+      }
+    }'
+}
+
+install_amneziawg_server_if_missing() {
+  echo
+  echo "[AWG] Checking AmneziaWG server..."
+
+  if command -v awg >/dev/null 2>&1 && [ -f /etc/amnezia/amneziawg/awg0.conf ]; then
+    echo "[AWG] AmneziaWG already installed. Skipping."
+    return 0
+  fi
+
+  echo "[AWG] Installing AmneziaWG server..."
+
+  export DEBIAN_FRONTEND=noninteractive
+
+  apt update
+  apt install -y software-properties-common curl wget gnupg2 ca-certificates iptables-persistent netfilter-persistent
+
+  if ! grep -R "amnezia" /etc/apt/sources.list /etc/apt/sources.list.d >/dev/null 2>&1; then
+    add-apt-repository -y ppa:amnezia/ppa
+  fi
+
+  apt update
+  apt install -y amneziawg amneziawg-tools
+
+  mkdir -p /etc/amnezia/amneziawg/clients
+  chmod 700 /etc/amnezia /etc/amnezia/amneziawg /etc/amnezia/amneziawg/clients
+
+  AWG_IFACE_NAME="awg0"
+  AWG_PORT_VALUE="${AWG_PORT:-64936}"
+  MAIN_IFACE="$(detect_main_iface)"
+  if [ -z "$MAIN_IFACE" ]; then
+    MAIN_IFACE="eth0"
+  fi
+
+  SERVER_PRIVATE_KEY="$(awg genkey)"
+  SERVER_PUBLIC_KEY="$(printf '%s' "$SERVER_PRIVATE_KEY" | awg pubkey)"
+
+  Jc=5
+  Jmin=50
+  Jmax=1000
+  S1=84
+  S2=69
+  S3=107
+  S4=72
+  H1=184145801
+  H2=896102974
+  H3=1412846426
+  H4=1681983794
+
+  cat > /etc/amnezia/amneziawg/awg0.conf <<CONF
+[Interface]
+PrivateKey = ${SERVER_PRIVATE_KEY}
+Address = 10.66.66.1/24, fd42:42:42::1/64
+ListenPort = ${AWG_PORT_VALUE}
+Jc = ${Jc}
+Jmin = ${Jmin}
+Jmax = ${Jmax}
+S1 = ${S1}
+S2 = ${S2}
+S3 = ${S3}
+S4 = ${S4}
+H1 = ${H1}
+H2 = ${H2}
+H3 = ${H3}
+H4 = ${H4}
+CONF
+
+  chmod 600 /etc/amnezia/amneziawg/awg0.conf
+
+  cat > /etc/sysctl.d/99-noora-awg.conf <<SYSCTL
+net.ipv4.ip_forward=1
+net.ipv6.conf.all.forwarding=1
+SYSCTL
+
+  sysctl --system >/dev/null || true
+
+  iptables -C INPUT -p udp --dport "${AWG_PORT_VALUE}" -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p udp --dport "${AWG_PORT_VALUE}" -j ACCEPT
+  iptables -C FORWARD -i awg0 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i awg0 -j ACCEPT
+  iptables -C FORWARD -o awg0 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -o awg0 -j ACCEPT
+  iptables -t nat -C POSTROUTING -s 10.66.66.0/24 -o "${MAIN_IFACE}" -j MASQUERADE 2>/dev/null || iptables -t nat -I POSTROUTING 1 -s 10.66.66.0/24 -o "${MAIN_IFACE}" -j MASQUERADE
+
+  netfilter-persistent save >/dev/null 2>&1 || true
+
+  systemctl daemon-reload
+  systemctl enable --now awg-quick@awg0
+
+  echo
+  echo "[AWG] AmneziaWG installed."
+  echo "[AWG] Interface: awg0"
+  echo "[AWG] Port: ${AWG_PORT_VALUE}"
+  echo "[AWG] Public key: ${SERVER_PUBLIC_KEY}"
+}
+
+
 fresh_install() {
   echo
   echo "Starting fresh install..."
 
   install_deps
   ask_token_and_owner
+  install_amneziawg_server_if_missing
   download_manager_files
   write_config_fresh
   start_services
@@ -153,6 +261,7 @@ update_install() {
 
   create_local_backup_before_changes
   install_deps
+  install_amneziawg_server_if_missing
   stop_manager_services
 
   if [ ! -f "$BOT_DIR/config.env" ]; then
@@ -177,6 +286,7 @@ reinstall_manager_only() {
 
   create_local_backup_before_changes
   install_deps
+  install_amneziawg_server_if_missing
   stop_manager_services
 
   local old_config="/root/noora-awg-config.env.bak"
