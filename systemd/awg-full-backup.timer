@@ -1,0 +1,10 @@
+[Unit]
+Description=Automatic AmneziaWG full backup
+
+[Timer]
+OnCalendar=*-*-* 00:00:00
+Persistent=true
+Unit=awg-full-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,6 @@
+[Unit]
+Description=Create and send full AmneziaWG backup
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/awg-send-backup-telegram.sh

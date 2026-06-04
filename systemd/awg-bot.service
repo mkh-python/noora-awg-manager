@@ -1,0 +1,15 @@
+[Unit]
+Description=Noora AWG Telegram Management Bot
+After=network-online.target awg-quick@awg0.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/awg-bot
+ExecStart=/opt/awg-bot/venv/bin/python /opt/awg-bot/bot.py
+Restart=always
+RestartSec=5
+EnvironmentFile=/opt/awg-bot/config.env
+
+[Install]
+WantedBy=multi-user.target
