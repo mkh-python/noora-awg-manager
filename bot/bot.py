@@ -681,7 +681,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             "اسم کاربر جدید را بفرست.\n\n"
             "مثال:\n"
-            "aria\n\n"
+            "noora\n\n"
             "فقط حروف انگلیسی، عدد، خط تیره و آندرلاین مجاز است.",
             reply_markup=back_keyboard(),
         )
@@ -752,7 +752,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "menu:extend":
         await query.edit_message_text(
-            "تمدید حجم و روز:\n\n/extend name gb days\n\nمثال:\n/extend aria 10 15\n\nیعنی ۱۰ گیگ و ۱۵ روز به کاربر اضافه می‌شود.",
+            "تمدید حجم و روز:\n\n/extend name gb days\n\nمثال:\n/extend noora 10 15\n\nیعنی ۱۰ گیگ و ۱۵ روز به کاربر اضافه می‌شود.",
             reply_markup=back_keyboard(),
         )
         return
@@ -926,7 +926,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "تنظیم دامنه و SSL\n\n"
                     "قبل از شروع، باید در پنل DNS دامنه یک A Record بسازی.\n\n"
                     "مثال:\n"
-                    "panel.example.com  A  194.5.192.122\n\n"
+                    "panel.example.com  A  203.0.113.10\n\n"
                     "حالا دامنه‌ای که می‌خواهی برای پنل استفاده شود را بفرست.\n\n"
                     "مثال:\n"
                     "panel.example.com\n\n"
@@ -950,7 +950,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "تنظیم دامنه و SSL\n\n"
                     "قبل از شروع، باید در پنل DNS دامنه یک A Record بسازی.\n\n"
                     "مثال:\n"
-                    "panel.example.com  A  194.5.192.122\n\n"
+                    "panel.example.com  A  203.0.113.10\n\n"
                     "حالا دامنه‌ای که می‌خواهی برای پنل استفاده شود را بفرست.\n\n"
                     "مثال:\n"
                     "panel.example.com\n\n"
@@ -1205,7 +1205,7 @@ async def main_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "اسم کاربر جدید را بفرست.\n\n"
             "مثال:\n"
-            "aria\n\n"
+            "noora\n\n"
             "فقط حروف انگلیسی، عدد، خط تیره و آندرلاین مجاز است.",
             reply_markup=main_keyboard(update.effective_user.id if update.effective_user else None),
         )
@@ -1741,7 +1741,7 @@ async def manage_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"دامنه ثبت شد:\n{domain}\n\n"
             "حالا IP استاتیک سرور را بفرست.\n\n"
             "برای این سرور معمولاً این است:\n"
-            "194.5.192.122"
+            "203.0.113.10"
         )
         return True
 
@@ -1752,7 +1752,7 @@ async def manage_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(
                 "IP نامعتبر است.\n\n"
                 "مثال:\n"
-                "194.5.192.122"
+                "203.0.113.10"
             )
             return True
 
@@ -2000,7 +2000,7 @@ def install_links_text():
         "🍏 iPhone / iPad:\n"
         "https://apps.apple.com/us/app/amneziawg/id6478942365\n\n"
         "🤖 Android - Google Play:\n"
-        "https://play.google.com/store/apps/details?id=org.amnezia.awg\n\n"
+        "https://play.google.com/store/apps/details?id=org.amnezia.vpn\n\n"
         "🤖 Android - APK / همه دانلودها:\n"
         "https://amnezia.org/downloads\n\n"
         "🪟 Windows:\n"
