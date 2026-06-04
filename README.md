@@ -160,3 +160,28 @@ Planned improvements:
 This project is provided as-is.
 
 Use it at your own risk.
+
+## Existing Installation Handling
+
+If Noora AWG Manager or AmneziaWG is already installed, the installer will not blindly overwrite everything.
+
+It will show a menu:
+
+    1) Update
+       Updates bot and scripts only.
+       Keeps configs, users, database, AmneziaWG settings and backup settings.
+
+    2) Reinstall Manager
+       Reinstalls the Telegram bot and Noora services.
+       Keeps AmneziaWG users and server configuration.
+
+    3) Full Wipe + Reinstall
+       Removes Noora Manager, AmneziaWG configuration, web panel data and installs again.
+       This option requires typing DELETE for safety.
+
+    4) Exit
+       Makes no changes.
+
+Before update, reinstall or full wipe, the installer creates a local safety backup in:
+
+    /root/noora-awg-before-change-YYYY-MM-DD_HH-MM-SS.tar.gz
