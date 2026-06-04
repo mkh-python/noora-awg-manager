@@ -15,6 +15,148 @@ BASE = Path("/opt/awg-bot")
 DB_PATH = BASE / "awg_bot.db"
 
 
+
+# NOORA_CANCEL_PATCH_BEGIN
+from telegram import InlineKeyboardButton as _NooraInlineKeyboardButton
+from telegram import InlineKeyboardMarkup as _NooraInlineKeyboardMarkup
+from telegram import Message as _NooraMessage
+from telegram.ext import ExtBot as _NooraExtBot
+from telegram.ext import CallbackQueryHandler as _NooraCallbackQueryHandler
+
+_NOORA_CANCEL_CALLBACK = "cancel:flow"
+
+def _noora_cancel_keyboard():
+    return _NooraInlineKeyboardMarkup([
+        [_NooraInlineKeyboardButton("❌ لغو", callback_data=_NOORA_CANCEL_CALLBACK)]
+    ])
+
+def _noora_text_needs_cancel(text):
+    if not text:
+        return False
+
+    text = str(text)
+
+    ignore_words = [
+        "لغو شد",
+        "به منوی اصلی",
+        "فایل کانفیگ",
+        "QR:",
+        "لینک نصب",
+        "راهنمای سریع",
+        "وضعیت سرور",
+    ]
+
+    for w in ignore_words:
+        if w in text:
+            return False
+
+    trigger_words = [
+        "وارد کن",
+        "وارد کنید",
+        "بفرست",
+        "ارسال کن",
+        "بنویس",
+        "انتخاب کن",
+        "انتخاب کنید",
+        "اسم",
+        "نام",
+        "حجم",
+        "روز",
+        "دامنه",
+        "آیدی",
+        "ایدی",
+        "توکن",
+        "کانال",
+        "چند",
+        "لطفا",
+        "لطفاً",
+        "دوباره",
+    ]
+
+    return any(w in text for w in trigger_words)
+
+def _noora_markup_with_cancel(markup):
+    if markup is None:
+        return _noora_cancel_keyboard()
+
+    if isinstance(markup, _NooraInlineKeyboardMarkup):
+        rows = [list(row) for row in markup.inline_keyboard]
+
+        for row in rows:
+            for btn in row:
+                if getattr(btn, "callback_data", None) == _NOORA_CANCEL_CALLBACK:
+                    return markup
+
+        rows.append([_NooraInlineKeyboardButton("❌ لغو", callback_data=_NOORA_CANCEL_CALLBACK)])
+        return _NooraInlineKeyboardMarkup(rows)
+
+    return markup
+
+_NOORA_ORIG_REPLY_TEXT = _NooraMessage.reply_text
+
+async def _noora_reply_text_with_cancel(self, *args, **kwargs):
+    text = kwargs.get("text")
+    if text is None and args:
+        text = args[0]
+
+    if _noora_text_needs_cancel(text):
+        kwargs["reply_markup"] = _noora_markup_with_cancel(kwargs.get("reply_markup"))
+
+    return await _NOORA_ORIG_REPLY_TEXT(self, *args, **kwargs)
+
+_NooraMessage.reply_text = _noora_reply_text_with_cancel
+
+_NOORA_ORIG_SEND_MESSAGE = _NooraExtBot.send_message
+
+async def _noora_send_message_with_cancel(self, *args, **kwargs):
+    text = kwargs.get("text")
+    if text is None and len(args) >= 2:
+        text = args[1]
+
+    if _noora_text_needs_cancel(text):
+        kwargs["reply_markup"] = _noora_markup_with_cancel(kwargs.get("reply_markup"))
+
+    return await _NOORA_ORIG_SEND_MESSAGE(self, *args, **kwargs)
+
+_NooraExtBot.send_message = _noora_send_message_with_cancel
+
+_NOORA_ORIG_EDIT_MESSAGE_TEXT = _NooraExtBot.edit_message_text
+
+async def _noora_edit_message_text_with_cancel(self, *args, **kwargs):
+    text = kwargs.get("text")
+    if text is None and args:
+        text = args[0]
+
+    if _noora_text_needs_cancel(text):
+        kwargs["reply_markup"] = _noora_markup_with_cancel(kwargs.get("reply_markup"))
+
+    return await _NOORA_ORIG_EDIT_MESSAGE_TEXT(self, *args, **kwargs)
+
+_NooraExtBot.edit_message_text = _noora_edit_message_text_with_cancel
+
+async def noora_cancel_flow_handler(update, context):
+    query = update.callback_query
+    if query:
+        await query.answer("لغو شد")
+        context.user_data.clear()
+
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        try:
+            await query.message.reply_text("❌ عملیات لغو شد. از منوی پایین گزینه بعدی را انتخاب کن.")
+        except Exception:
+            pass
+        return
+
+    context.user_data.clear()
+    if update.effective_message:
+        await update.effective_message.reply_text("❌ عملیات لغو شد.")
+# NOORA_CANCEL_PATCH_END
+
+
 def load_env(path="/opt/awg-bot/config.env"):
     data = {}
     with open(path, "r") as f:
@@ -2515,7 +2657,8 @@ def main():
 
     app = Application.builder().token(BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
+    app.add_handler(_NooraCallbackQueryHandler(noora_cancel_flow_handler, pattern="^cancel:flow$"), group=-1)
+app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("id", chat_id))
     app.add_handler(MessageHandler(filters.Regex(r"^/id(@\\w+)?$"), chat_id))
     app.add_handler(CommandHandler("add", add_user))
