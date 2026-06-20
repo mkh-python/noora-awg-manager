@@ -411,9 +411,31 @@ async def handle_license_text(update: Update, context: ContextTypes.DEFAULT_TYPE
     if text == "📨 درخواست لایسنس رایگان":
         try:
             result = await asyncio.to_thread(request_license_remote, uid)
+
+            if result.get("license_key") or result.get("status") in {
+                "active",
+                "license_exists",
+                "already_exists",
+            }:
+                await update.message.reply_text(
+                    "ℹ️ برای حساب شما از قبل لایسنس فعال وجود دارد.\n\n"
+                    "دکمه «🔑 وارد کردن لایسنس» را بزن و کلید موجود را وارد کن.",
+                    reply_markup=license_keyboard(),
+                )
+                return True
+
+            request_id = result.get("request_id")
+            if not request_id:
+                await update.message.reply_text(
+                    "❌ درخواست جدید ثبت نشد.\n\n"
+                    "احتمالاً برای این حساب از قبل لایسنس وجود دارد.",
+                    reply_markup=license_keyboard(),
+                )
+                return True
+
             await update.message.reply_text(
                 "✅ درخواست لایسنس ثبت شد.\n\n"
-                f"شماره درخواست: {result.get('request_id', '-')}\n"
+                f"شماره درخواست: {request_id}\n"
                 "بعد از تأیید پشتیبانی، دکمه «بررسی مجدد لایسنس» را بزن.",
                 reply_markup=license_keyboard(),
             )
