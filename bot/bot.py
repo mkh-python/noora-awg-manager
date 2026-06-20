@@ -43,6 +43,10 @@ GITHUB_BRANCH = ENV.get("GITHUB_BRANCH", "main").strip()
 VERSION_FILE = BASE / "VERSION"
 UPDATE_SCRIPT = Path("/usr/local/bin/noora-awg-update.sh")
 OWNER_ID = 7819156066
+
+CREATOR_USERNAME = "awgdeveloper"
+CREATOR_URL = f"https://t.me/{CREATOR_USERNAME}"
+
 PENDING_ADD = {}
 PENDING_EXTEND = {}
 PENDING_MANAGE = {}
@@ -589,6 +593,7 @@ def main_keyboard(user_id=None):
         ["⛔ غیرفعال", "✅ فعال‌سازی"],
         ["➕ تمدید حجم/روز", "🗑 حذف کاربر"],
         ["📊 وضعیت سرور", "🆔 دریافت ID"],
+        ["💬 چت با سازنده"],
     ]
 
     if user_id == OWNER_ID:
@@ -599,6 +604,17 @@ def main_keyboard(user_id=None):
         resize_keyboard=True,
         is_persistent=True,
     )
+
+
+def creator_contact_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "💬 شروع چت با سازنده",
+                url=CREATOR_URL,
+            ),
+        ],
+    ])
 
 
 def back_keyboard():
@@ -1375,6 +1391,21 @@ async def main_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context,
             "برای تمدید، کاربر را انتخاب کن:",
             reply_markup=users_action_keyboard("extend"),
+        )
+        return
+
+    if text == "💬 چت با سازنده":
+        await delete_last_inline(
+            context,
+            update.effective_chat.id,
+            uid,
+        )
+
+        await update.message.reply_text(
+            "💬 ارتباط با سازنده ربات\n\n"
+            f"آیدی سازنده:\n@{CREATOR_USERNAME}\n\n"
+            "برای شروع گفتگو روی دکمه زیر بزن.",
+            reply_markup=creator_contact_keyboard(),
         )
         return
 
