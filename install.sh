@@ -35,7 +35,7 @@ install_deps() {
   export DEBIAN_FRONTEND=noninteractive
   apt update
   apt install -y \
-    curl wget git python3-venv python3-pip qrencode sqlite3 \
+    curl wget git unzip python3-venv python3-pip qrencode sqlite3 \
     iptables-persistent netfilter-persistent nginx certbot python3-certbot-nginx \
     rsync tar gzip ca-certificates lsb-release
 }

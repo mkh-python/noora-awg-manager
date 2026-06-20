@@ -50,6 +50,10 @@ REPO="$(read_env GITHUB_REPO "$REPO_DEFAULT")"
 BRANCH="$(read_env GITHUB_BRANCH "$BRANCH_DEFAULT")"
 ARCHIVE_URL="https://codeload.github.com/${REPO}/zip/refs/heads/${BRANCH}"
 
+for command_name in curl unzip find python3 tar install systemctl; do
+  command -v "$command_name" >/dev/null 2>&1 ||     fail "دستور ضروری روی سرور نصب نیست: $command_name"
+done
+
 mkdir -p "$BACKUP_DIR"
 curl -fL --connect-timeout 15 --max-time 180 "$ARCHIVE_URL" -o "$TMP_DIR/source.zip"
 unzip -q "$TMP_DIR/source.zip" -d "$TMP_DIR/unpacked"
