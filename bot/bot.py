@@ -38,6 +38,10 @@ CLIENT_DIR = Path(ENV.get("CLIENT_DIR", "/etc/amnezia/amneziawg/clients"))
 DNS = ENV.get("DNS", "1.1.1.1,1.0.0.1")
 BACKUP_CHAT_ID = ENV.get("BACKUP_CHAT_ID", "").strip()
 BACKUP_LINK = ENV.get("BACKUP_LINK", "").strip()
+GITHUB_REPO = ENV.get("GITHUB_REPO", "mkh-python/noora-awg-manager").strip()
+GITHUB_BRANCH = ENV.get("GITHUB_BRANCH", "main").strip()
+VERSION_FILE = BASE / "VERSION"
+UPDATE_SCRIPT = Path("/usr/local/bin/noora-awg-update.sh")
 OWNER_ID = 7819156066
 PENDING_ADD = {}
 PENDING_EXTEND = {}
@@ -123,6 +127,44 @@ def save_admins():
     write_env_value("ADMINS", ",".join(str(x) for x in sorted(ADMINS)))
 
 
+def current_version():
+    try:
+        value = VERSION_FILE.read_text(encoding="utf-8").strip()
+        return value or "0.0.0"
+    except OSError:
+        return "0.0.0"
+
+
+def latest_version():
+    url = (
+        "https://raw.githubusercontent.com/"
+        f"{GITHUB_REPO}/{GITHUB_BRANCH}/VERSION"
+    )
+    value = run([
+        "curl", "-fsSL",
+        "--connect-timeout", "10",
+        "--max-time", "20",
+        url,
+    ]).strip()
+
+    pattern = r"[0-9]+(?:\.[0-9]+){1,3}(?:[-+][0-9A-Za-z.-]+)?"
+    if not re.fullmatch(pattern, value):
+        raise RuntimeError("شماره نسخه دریافت‌شده از GitHub معتبر نیست.")
+    return value
+
+
+def start_update_job(chat_id):
+    if not UPDATE_SCRIPT.exists():
+        raise RuntimeError(f"اسکریپت بروزرسانی پیدا نشد: {UPDATE_SCRIPT}")
+
+    run([
+        "systemd-run",
+        "--collect",
+        str(UPDATE_SCRIPT),
+        str(int(chat_id)),
+    ])
+
+
 def owner_only_keyboard():
     return InlineKeyboardMarkup([
         [
@@ -143,6 +185,9 @@ def owner_only_keyboard():
         ],
         [
             InlineKeyboardButton("🔁 تعداد بکاپ روزانه", callback_data="manage:set_backup_time"),
+        ],
+        [
+            InlineKeyboardButton("⬆️ بروزرسانی ربات", callback_data="manage:update_bot"),
         ],
         [
             InlineKeyboardButton("📋 نمایش تنظیمات", callback_data="manage:show_settings"),
@@ -1067,9 +1112,48 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        if action == "update_bot":
+            try:
+                installed = current_version()
+
+                await query.edit_message_text(
+                    "🔎 در حال بررسی نسخه GitHub..."
+                )
+
+                available = await asyncio.to_thread(latest_version)
+
+                if installed == available:
+                    await query.edit_message_text(
+                        "✅ آخرین نسخه را داری.\n\n"
+                        f"نسخه نصب‌شده: {installed}",
+                        reply_markup=owner_only_keyboard(),
+                    )
+                    return
+
+                await query.edit_message_text(
+                    "⬆️ نسخه جدید پیدا شد.\n\n"
+                    f"نسخه نصب‌شده: {installed}\n"
+                    f"نسخه جدید: {available}\n\n"
+                    "در حال بروزرسانی کامل از GitHub هستم؛ لطفاً صبر کنید."
+                )
+
+                await asyncio.to_thread(
+                    start_update_job,
+                    query.message.chat_id,
+                )
+                return
+
+            except Exception as e:
+                await query.edit_message_text(
+                    f"❌ بررسی یا شروع بروزرسانی ناموفق بود:\n\n{e}",
+                    reply_markup=owner_only_keyboard(),
+                )
+                return
+
         if action == "show_settings":
             text = (
                 "تنظیمات فعلی:\n\n"
+                f"VERSION: {current_version()}\n"
                 f"OWNER_ID: {OWNER_ID}\n"
                 f"ADMINS: {','.join(str(x) for x in sorted(ADMINS))}\n"
                 f"BACKUP_CHAT_ID: {BACKUP_CHAT_ID or 'Not set'}\n"
