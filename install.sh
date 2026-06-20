@@ -103,6 +103,7 @@ download_manager_files() {
 
   wget -qO "$BOT_DIR/bot.py" "$REPO_RAW/bot/bot.py"
   wget -qO "$BOT_DIR/requirements.txt" "$REPO_RAW/bot/requirements.txt"
+  wget -qO "$BOT_DIR/VERSION" "$REPO_RAW/VERSION"
 
   python3 -m venv "$BOT_DIR/venv"
   "$BOT_DIR/venv/bin/pip" install --upgrade pip
