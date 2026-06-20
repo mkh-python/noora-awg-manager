@@ -55,6 +55,7 @@ CREATOR_URL = f"https://t.me/{CREATOR_USERNAME}"
 
 LICENSE_REQUIRED = ENV.get("LICENSE_REQUIRED", "0").strip().lower() in {"1", "true", "yes", "on"}
 LICENSE_API_URL = ENV.get("LICENSE_API_URL", "").strip().rstrip("/")
+SUPPORT_USERNAME = ENV.get("SUPPORT_USERNAME", "@awgdeveloper").strip()
 LICENSE_INSTALL_ID_FILE = BASE / "INSTALL_ID"
 LICENSE_STATE_FILE = BASE / "license-state.json"
 LICENSE_CACHE_SECONDS = 300
@@ -261,7 +262,7 @@ def license_api_request(path, payload):
     return result
 
 
-def license_payload(user_id, license_key=None):
+def license_payload(user_id, license_key=None, telegram_username="", full_name="", phone=""):
     payload = {
         "telegram_user_id": int(user_id),
         "install_id": get_install_id(),
@@ -269,6 +270,12 @@ def license_payload(user_id, license_key=None):
     }
     if license_key:
         payload["license_key"] = license_key.strip().upper()
+    if telegram_username:
+        payload["telegram_username"] = str(telegram_username).lstrip("@")
+    if full_name:
+        payload["full_name"] = str(full_name)
+    if phone:
+        payload["phone"] = str(phone)
     return payload
 
 
@@ -329,10 +336,10 @@ def activate_license_remote(user_id, license_key):
     return result
 
 
-def request_license_remote(user_id):
+def request_license_remote(user_id, telegram_username="", full_name=""):
     return license_api_request(
         "/api/v1/license/request",
-        license_payload(user_id),
+        license_payload(user_id, telegram_username=telegram_username, full_name=full_name),
     )
 
 
@@ -410,13 +417,16 @@ async def handle_license_text(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if text == "📨 درخواست لایسنس رایگان":
         try:
-            result = await asyncio.to_thread(request_license_remote, uid)
+            result = await asyncio.to_thread(
+                request_license_remote,
+                uid,
+                update.effective_user.username or "",
+                update.effective_user.full_name or "",
+            )
+            status = str(result.get("status", "")).strip().lower()
+            request_id = result.get("request_id")
 
-            if result.get("license_key") or result.get("status") in {
-                "active",
-                "license_exists",
-                "already_exists",
-            }:
+            if status == "license_exists":
                 await update.message.reply_text(
                     "ℹ️ برای حساب شما از قبل لایسنس فعال وجود دارد.\n\n"
                     "دکمه «🔑 وارد کردن لایسنس» را بزن و کلید موجود را وارد کن.",
@@ -424,11 +434,11 @@ async def handle_license_text(update: Update, context: ContextTypes.DEFAULT_TYPE
                 )
                 return True
 
-            request_id = result.get("request_id")
             if not request_id:
+                message = str(result.get("message", "پاسخ سرور ناقص بود.")).strip()
                 await update.message.reply_text(
                     "❌ درخواست جدید ثبت نشد.\n\n"
-                    "احتمالاً برای این حساب از قبل لایسنس وجود دارد.",
+                    f"توضیح: {message}",
                     reply_markup=license_keyboard(),
                 )
                 return True
@@ -436,7 +446,9 @@ async def handle_license_text(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(
                 "✅ درخواست لایسنس ثبت شد.\n\n"
                 f"شماره درخواست: {request_id}\n"
-                "بعد از تأیید پشتیبانی، دکمه «بررسی مجدد لایسنس» را بزن.",
+                "بعد از تأیید پشتیبانی، دکمه «بررسی مجدد لایسنس» را بزن.\n\n"
+                "اگر تا ۱۰ دقیقه آینده لایسنس فعال نشد، به پشتیبانی پیام بده:\n"
+                f"{SUPPORT_USERNAME}",
                 reply_markup=license_keyboard(),
             )
         except Exception as exc:
@@ -2981,6 +2993,27 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(out[:3900])
 
 
+async def license_request_watch_job(context: ContextTypes.DEFAULT_TYPE):
+    if not LICENSE_REQUIRED:
+        return
+    state = load_license_state()
+    if state.get("valid"):
+        return
+    try:
+        result = await asyncio.to_thread(check_request_remote, OWNER_ID)
+        if result.get("valid"):
+            await context.bot.send_message(
+                chat_id=OWNER_ID,
+                text=(
+                    "✅ لایسنس شما ساخته و فعال شد.\n\n"
+                    "پنل Noora AWG اکنون آماده استفاده است."
+                ),
+                reply_markup=main_keyboard(OWNER_ID),
+            )
+    except Exception as exc:
+        print("license request watch error:", exc)
+
+
 async def quota_job(context: ContextTypes.DEFAULT_TYPE):
     try:
         update_traffic_and_enforce()
@@ -3013,6 +3046,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
 
     app.job_queue.run_repeating(quota_job, interval=60, first=10)
+    app.job_queue.run_repeating(license_request_watch_job, interval=60, first=15)
     app.run_polling()
 
 

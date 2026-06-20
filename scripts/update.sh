@@ -89,8 +89,7 @@ install -m 0644 "$SOURCE_DIR/systemd/awg-full-backup.service" /etc/systemd/syste
 install -m 0644 "$SOURCE_DIR/systemd/awg-full-backup.timer" /etc/systemd/system/awg-full-backup.timer
 
 # Existing installations stay unlocked until the license API URL is configured.
-CURRENT_ADMINS="$(read_env ADMINS '')"
-ensure_env_key OWNER_ID "${CURRENT_ADMINS%%,*}"
+ensure_env_key OWNER_ID "$(read_env ADMINS '')"
 ensure_env_key LICENSE_REQUIRED "0"
 ensure_env_key LICENSE_API_URL ""
 
