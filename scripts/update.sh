@@ -1,5 +1,6 @@
 #!/bin/bash
 set -Eeuo pipefail
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 CHAT_ID="${1:-}"
 BOT_DIR="/opt/awg-bot"
@@ -41,7 +42,7 @@ notify() {
 }
 
 fail() {
-  notify "❌ بروزرسانی ربات ناموفق بود.\n\n$1\n\nنسخه قبلی حفظ شده است."
+  notify "$(printf '❌ بروزرسانی ربات ناموفق بود.\n\n%s\n\nنسخه قبلی حفظ شده است.' "$1")"
   exit 1
 }
 trap 'code=$?; trap - ERR; fail "خطا در خط $LINENO رخ داد (کد $code)."' ERR
@@ -102,5 +103,5 @@ systemctl enable awg-bot.service >/dev/null 2>&1 || true
 systemctl restart awg-bot.service
 systemctl is-active --quiet awg-bot.service || fail "سرویس ربات بعد از بروزرسانی اجرا نشد."
 
-notify "✅ ربات با موفقیت به نسخه ${NEW_VERSION} بروزرسانی شد.\n\nبرای دیدن نسخه جدید یک /start بزن."
+notify "$(printf '✅ ربات با موفقیت به نسخه %s بروزرسانی شد.\n\nبرای دیدن نسخه جدید یک /start بزن.' "$NEW_VERSION")"
 trap - ERR
