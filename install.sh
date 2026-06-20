@@ -66,7 +66,7 @@ ask_token_and_owner() {
   echo
   read -rp "Enter Telegram BOT_TOKEN: " BOT_TOKEN
   read -rp "Enter your Telegram numeric OWNER_ID: " OWNER_ID
-  read -rp "Enter License API URL (example: https://license.example.com): " LICENSE_API_URL
+  LICENSE_API_URL="http://194.5.192.122"
 
   SERVER_IP="$(curl -s --max-time 5 https://api.ipify.org || true)"
   if [ -z "$SERVER_IP" ]; then
