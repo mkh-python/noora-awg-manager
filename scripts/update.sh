@@ -1,301 +1,103 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -Eeuo pipefail
 
-BOT_DIR="/opt/awg-bot"
-CONFIG_FILE="${BOT_DIR}/config.env"
-BOT_FILE="${BOT_DIR}/bot.py"
-VERSION_FILE="${BOT_DIR}/VERSION"
-REQUIREMENTS_FILE="${BOT_DIR}/requirements.txt"
-SERVICE_NAME="awg-bot.service"
 CHAT_ID="${1:-}"
+BOT_DIR="/opt/awg-bot"
+CONFIG_FILE="$BOT_DIR/config.env"
+REPO_DEFAULT="mkh-python/noora-awg-manager"
+BRANCH_DEFAULT="main"
+TMP_DIR="$(mktemp -d /tmp/noora-awg-update.XXXXXX)"
+BACKUP_DIR="/root/noora-awg-update-backups"
+STAMP="$(date +%Y-%m-%d_%H-%M-%S)"
 
-TMP_DIR=""
-BACKUP_DIR=""
-FILES_REPLACED=0
-
-log() {
-    printf '[noora-update] %s\n' "$*"
-}
-
-read_config() {
-    local key="$1"
-    local default_value="${2:-}"
-    local value=""
-
-    if [[ -f "$CONFIG_FILE" ]]; then
-        value="$(grep -E "^${key}=" "$CONFIG_FILE" 2>/dev/null | tail -n 1 | cut -d= -f2- || true)"
-    fi
-
-    printf '%s' "${value:-$default_value}"
-}
-
-send_telegram() {
-    local message="$1"
-    local token=""
-
-    token="$(read_config BOT_TOKEN "")"
-
-    if [[ -z "$token" || -z "$CHAT_ID" ]]; then
-        return 0
-    fi
-
-    curl -fsS \
-        --connect-timeout 10 \
-        --max-time 30 \
-        -X POST \
-        "https://api.telegram.org/bot${token}/sendMessage" \
-        --data-urlencode "chat_id=${CHAT_ID}" \
-        --data-urlencode "text=${message}" \
-        >/dev/null 2>&1 || true
-}
-
-cleanup() {
-    if [[ -n "$TMP_DIR" && -d "$TMP_DIR" ]]; then
-        rm -rf "$TMP_DIR"
-    fi
-}
-
-restore_backup() {
-    if [[ "$FILES_REPLACED" -ne 1 ]]; then
-        return 0
-    fi
-
-    if [[ -z "$BACKUP_DIR" || ! -d "$BACKUP_DIR" ]]; then
-        return 0
-    fi
-
-    log "Restoring previous version..."
-
-    if [[ -f "$BACKUP_DIR/bot.py" ]]; then
-        install -m 0644 "$BACKUP_DIR/bot.py" "$BOT_FILE"
-    fi
-
-    if [[ -f "$BACKUP_DIR/requirements.txt" ]]; then
-        install -m 0644 "$BACKUP_DIR/requirements.txt" "$REQUIREMENTS_FILE"
-    fi
-
-    if [[ -f "$BACKUP_DIR/VERSION" ]]; then
-        install -m 0644 "$BACKUP_DIR/VERSION" "$VERSION_FILE"
-    fi
-
-    if [[ -f "$BACKUP_DIR/awg-bot.service" ]]; then
-        install -m 0644 "$BACKUP_DIR/awg-bot.service" "/etc/systemd/system/${SERVICE_NAME}"
-    fi
-
-    systemctl daemon-reload || true
-    systemctl restart "$SERVICE_NAME" || true
-}
-
-handle_error() {
-    local exit_code=$?
-    local line_number="${1:-unknown}"
-
-    trap - ERR
-
-    log "Update failed at line ${line_number}."
-    restore_backup
-
-    send_telegram "❌ بروزرسانی ربات ناموفق بود.
-
-نسخه قبلی به‌صورت خودکار برگردانده شد."
-
-    exit "$exit_code"
-}
-
-trap 'handle_error $LINENO' ERR
+cleanup() { rm -rf "$TMP_DIR"; }
 trap cleanup EXIT
 
-if [[ "$(id -u)" -ne 0 ]]; then
-    echo "This script must be run as root." >&2
-    exit 1
-fi
+read_env() {
+  local key="$1" default="$2" value=""
+  if [[ -f "$CONFIG_FILE" ]]; then
+    value="$(grep -E "^${key}=" "$CONFIG_FILE" | tail -n1 | cut -d= -f2- || true)"
+  fi
+  printf '%s' "${value:-$default}"
+}
 
-if [[ ! -d "$BOT_DIR" ]]; then
-    echo "Bot directory not found: $BOT_DIR" >&2
-    exit 1
-fi
 
-if [[ ! -f "$CONFIG_FILE" ]]; then
-    echo "Config file not found: $CONFIG_FILE" >&2
-    exit 1
-fi
+ensure_env_key() {
+  local key="$1" value="$2"
+  if ! grep -qE "^${key}=" "$CONFIG_FILE" 2>/dev/null; then
+    printf '%s=%s\n' "$key" "$value" >> "$CONFIG_FILE"
+  fi
+}
 
-if [[ ! -f "$BOT_FILE" ]]; then
-    echo "Bot file not found: $BOT_FILE" >&2
-    exit 1
-fi
+notify() {
+  local text="$1"
+  local token
+  token="$(read_env BOT_TOKEN '')"
+  [[ -n "$CHAT_ID" && -n "$token" ]] || return 0
+  curl -fsS --max-time 20 \
+    -X POST "https://api.telegram.org/bot${token}/sendMessage" \
+    --data-urlencode "chat_id=${CHAT_ID}" \
+    --data-urlencode "text=${text}" >/dev/null || true
+}
 
-if [[ ! -x "$BOT_DIR/venv/bin/python" ]]; then
-    echo "Python virtual environment not found." >&2
-    exit 1
-fi
+fail() {
+  notify "❌ بروزرسانی ربات ناموفق بود.\n\n$1\n\nنسخه قبلی حفظ شده است."
+  exit 1
+}
+trap 'code=$?; trap - ERR; fail "خطا در خط $LINENO رخ داد (کد $code)."' ERR
 
-REPO="$(read_config GITHUB_REPO "mkh-python/noora-awg-manager")"
-BRANCH="$(read_config GITHUB_BRANCH "main")"
+REPO="$(read_env GITHUB_REPO "$REPO_DEFAULT")"
+BRANCH="$(read_env GITHUB_BRANCH "$BRANCH_DEFAULT")"
+ARCHIVE_URL="https://codeload.github.com/${REPO}/zip/refs/heads/${BRANCH}"
 
-if [[ ! "$REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
-    echo "Invalid GITHUB_REPO: $REPO" >&2
-    exit 1
-fi
-
-if [[ ! "$BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]]; then
-    echo "Invalid GITHUB_BRANCH: $BRANCH" >&2
-    exit 1
-fi
-
-ZIP_URL="https://codeload.github.com/${REPO}/zip/refs/heads/${BRANCH}"
-
-TMP_DIR="$(mktemp -d /tmp/noora-awg-update.XXXXXX)"
-BACKUP_DIR="/root/noora-awg-update-backups/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$BACKUP_DIR"
+curl -fL --connect-timeout 15 --max-time 180 "$ARCHIVE_URL" -o "$TMP_DIR/source.zip"
+unzip -q "$TMP_DIR/source.zip" -d "$TMP_DIR/unpacked"
+SOURCE_DIR="$(find "$TMP_DIR/unpacked" -mindepth 1 -maxdepth 1 -type d | head -n1)"
 
-CURRENT_VERSION="0.0.0"
-if [[ -f "$VERSION_FILE" ]]; then
-    CURRENT_VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
-fi
+[[ -n "$SOURCE_DIR" ]] || fail "فایل دانلودشده ساختار معتبری ندارد."
+for required in VERSION bot/bot.py bot/requirements.txt scripts/backup.sh scripts/send-backup.sh scripts/update.sh systemd/awg-bot.service systemd/awg-full-backup.service systemd/awg-full-backup.timer; do
+  [[ -f "$SOURCE_DIR/$required" ]] || fail "فایل ضروری در نسخه جدید وجود ندارد: $required"
+done
 
-log "Current version: $CURRENT_VERSION"
-log "Repository: $REPO"
-log "Branch: $BRANCH"
-log "Downloading source..."
+NEW_VERSION="$(tr -d '[:space:]' < "$SOURCE_DIR/VERSION")"
+[[ "$NEW_VERSION" =~ ^[0-9]+(\.[0-9]+){1,3}([-+][0-9A-Za-z.-]+)?$ ]] || fail "شماره نسخه جدید معتبر نیست."
+python3 -m py_compile "$SOURCE_DIR/bot/bot.py" || fail "کد bot.py نسخه جدید خطای نحوی دارد."
 
-curl -fL \
-    --connect-timeout 15 \
-    --max-time 180 \
-    "$ZIP_URL" \
-    -o "$TMP_DIR/source.zip"
+# Backup only files that updater changes. User data/configuration remain untouched.
+tar -czf "$BACKUP_DIR/manager-${STAMP}.tar.gz" \
+  "$BOT_DIR/bot.py" "$BOT_DIR/requirements.txt" "$BOT_DIR/VERSION" \
+  /usr/local/bin/awg-full-backup.sh /usr/local/bin/awg-send-backup-telegram.sh /usr/local/bin/noora-awg-update.sh \
+  /etc/systemd/system/awg-bot.service /etc/systemd/system/awg-full-backup.service /etc/systemd/system/awg-full-backup.timer \
+  2>/dev/null || true
 
-log "Extracting source..."
-python3 -m zipfile -e "$TMP_DIR/source.zip" "$TMP_DIR/source"
+install -m 0644 "$SOURCE_DIR/bot/bot.py" "$BOT_DIR/bot.py.new"
+install -m 0644 "$SOURCE_DIR/bot/requirements.txt" "$BOT_DIR/requirements.txt.new"
+install -m 0644 "$SOURCE_DIR/VERSION" "$BOT_DIR/VERSION.new"
 
-SOURCE_ROOT="$(find "$TMP_DIR/source" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+# Install dependencies before switching code.
+"$BOT_DIR/venv/bin/pip" install -r "$BOT_DIR/requirements.txt.new"
 
-if [[ -z "$SOURCE_ROOT" || ! -d "$SOURCE_ROOT" ]]; then
-    echo "Downloaded source structure is invalid." >&2
-    exit 1
-fi
+mv -f "$BOT_DIR/bot.py.new" "$BOT_DIR/bot.py"
+mv -f "$BOT_DIR/requirements.txt.new" "$BOT_DIR/requirements.txt"
+mv -f "$BOT_DIR/VERSION.new" "$BOT_DIR/VERSION"
+install -m 0755 "$SOURCE_DIR/scripts/backup.sh" /usr/local/bin/awg-full-backup.sh
+install -m 0755 "$SOURCE_DIR/scripts/send-backup.sh" /usr/local/bin/awg-send-backup-telegram.sh
+install -m 0755 "$SOURCE_DIR/scripts/update.sh" /usr/local/bin/noora-awg-update.sh
+install -m 0644 "$SOURCE_DIR/systemd/awg-bot.service" /etc/systemd/system/awg-bot.service
+install -m 0644 "$SOURCE_DIR/systemd/awg-full-backup.service" /etc/systemd/system/awg-full-backup.service
+install -m 0644 "$SOURCE_DIR/systemd/awg-full-backup.timer" /etc/systemd/system/awg-full-backup.timer
 
-if [[ -f "$SOURCE_ROOT/bot/bot.py" ]]; then
-    NEW_BOT_FILE="$SOURCE_ROOT/bot/bot.py"
-elif [[ -f "$SOURCE_ROOT/bot.py" ]]; then
-    NEW_BOT_FILE="$SOURCE_ROOT/bot.py"
-else
-    echo "bot.py was not found in the GitHub repository." >&2
-    exit 1
-fi
+# Existing installations stay unlocked until the license API URL is configured.
+CURRENT_ADMINS="$(read_env ADMINS '')"
+ensure_env_key OWNER_ID "${CURRENT_ADMINS%%,*}"
+ensure_env_key LICENSE_REQUIRED "0"
+ensure_env_key LICENSE_API_URL ""
 
-if [[ -f "$SOURCE_ROOT/bot/requirements.txt" ]]; then
-    NEW_REQUIREMENTS_FILE="$SOURCE_ROOT/bot/requirements.txt"
-elif [[ -f "$SOURCE_ROOT/requirements.txt" ]]; then
-    NEW_REQUIREMENTS_FILE="$SOURCE_ROOT/requirements.txt"
-else
-    NEW_REQUIREMENTS_FILE=""
-fi
-
-if [[ ! -f "$SOURCE_ROOT/VERSION" ]]; then
-    echo "VERSION was not found in the repository root." >&2
-    exit 1
-fi
-
-NEW_VERSION="$(tr -d '[:space:]' < "$SOURCE_ROOT/VERSION")"
-VERSION_PATTERN='^[0-9]+(\.[0-9]+){1,3}([-+][0-9A-Za-z.-]+)?$'
-
-if [[ ! "$NEW_VERSION" =~ $VERSION_PATTERN ]]; then
-    echo "Invalid GitHub VERSION: $NEW_VERSION" >&2
-    exit 1
-fi
-
-log "Available version: $NEW_VERSION"
-
-if [[ "$CURRENT_VERSION" == "$NEW_VERSION" ]]; then
-    log "The latest version is already installed."
-
-    send_telegram "✅ آخرین نسخه را داری.
-
-نسخه نصب‌شده: ${CURRENT_VERSION}"
-
-    exit 0
-fi
-
-log "Checking Python syntax..."
-"$BOT_DIR/venv/bin/python" -m py_compile "$NEW_BOT_FILE"
-
-log "Backing up current version..."
-cp -a "$BOT_FILE" "$BACKUP_DIR/bot.py"
-
-if [[ -f "$REQUIREMENTS_FILE" ]]; then
-    cp -a "$REQUIREMENTS_FILE" "$BACKUP_DIR/requirements.txt"
-fi
-
-if [[ -f "$VERSION_FILE" ]]; then
-    cp -a "$VERSION_FILE" "$BACKUP_DIR/VERSION"
-fi
-
-if [[ -f "/etc/systemd/system/${SERVICE_NAME}" ]]; then
-    cp -a "/etc/systemd/system/${SERVICE_NAME}" "$BACKUP_DIR/awg-bot.service"
-fi
-
-if [[ -n "$NEW_REQUIREMENTS_FILE" ]]; then
-    log "Installing Python requirements..."
-    "$BOT_DIR/venv/bin/pip" install \
-        --disable-pip-version-check \
-        -r "$NEW_REQUIREMENTS_FILE"
-fi
-
-FILES_REPLACED=1
-
-log "Replacing bot.py..."
-install -m 0644 "$NEW_BOT_FILE" "$BOT_FILE"
-
-log "Replacing VERSION..."
-install -m 0644 "$SOURCE_ROOT/VERSION" "$VERSION_FILE"
-
-if [[ -n "$NEW_REQUIREMENTS_FILE" ]]; then
-    install -m 0644 "$NEW_REQUIREMENTS_FILE" "$REQUIREMENTS_FILE"
-fi
-
-if [[ -f "$SOURCE_ROOT/systemd/awg-bot.service" ]]; then
-    log "Updating systemd service..."
-    install -m 0644 \
-        "$SOURCE_ROOT/systemd/awg-bot.service" \
-        "/etc/systemd/system/${SERVICE_NAME}"
-fi
-
-if [[ -f "$SOURCE_ROOT/scripts/backup.sh" ]]; then
-    install -m 0755 \
-        "$SOURCE_ROOT/scripts/backup.sh" \
-        "/usr/local/bin/awg-full-backup.sh"
-fi
-
-if [[ -f "$SOURCE_ROOT/scripts/send-backup.sh" ]]; then
-    install -m 0755 \
-        "$SOURCE_ROOT/scripts/send-backup.sh" \
-        "/usr/local/bin/awg-send-backup-telegram.sh"
-fi
-
-log "Checking installed bot.py..."
-"$BOT_DIR/venv/bin/python" -m py_compile "$BOT_FILE"
-
-log "Restarting service..."
 systemctl daemon-reload
-systemctl enable "$SERVICE_NAME" >/dev/null 2>&1 || true
-systemctl restart "$SERVICE_NAME"
+systemctl enable awg-bot.service >/dev/null 2>&1 || true
+systemctl restart awg-bot.service
+systemctl is-active --quiet awg-bot.service || fail "سرویس ربات بعد از بروزرسانی اجرا نشد."
 
-sleep 5
-
-if ! systemctl is-active --quiet "$SERVICE_NAME"; then
-    log "Service failed after update."
-    journalctl -u "$SERVICE_NAME" -n 60 --no-pager || true
-    exit 1
-fi
-
-FILES_REPLACED=0
+notify "✅ ربات با موفقیت به نسخه ${NEW_VERSION} بروزرسانی شد.\n\nبرای دیدن نسخه جدید یک /start بزن."
 trap - ERR
-
-send_telegram "✅ ربات با موفقیت به نسخه ${NEW_VERSION} بروزرسانی شد.
-
-برای مشاهده نسخه جدید یک /start بزن."
-
-log "Update completed successfully."
-log "Installed version: $NEW_VERSION"
-log "Backup directory: $BACKUP_DIR"

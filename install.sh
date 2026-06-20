@@ -52,6 +52,7 @@ create_local_backup_before_changes() {
     "$BACKUP_TIMER" \
     "$BACKUP_SCRIPT" \
     "$SEND_BACKUP_SCRIPT" \
+    "$UPDATE_SCRIPT" \
     "$AWG_DIR" \
     "$AWG_WEB_DIR" \
     "$AWG_WEB_DATA" \
@@ -65,6 +66,7 @@ ask_token_and_owner() {
   echo
   read -rp "Enter Telegram BOT_TOKEN: " BOT_TOKEN
   read -rp "Enter your Telegram numeric OWNER_ID: " OWNER_ID
+  read -rp "Enter License API URL (example: https://license.example.com): " LICENSE_API_URL
 
   SERVER_IP="$(curl -s --max-time 5 https://api.ipify.org || true)"
   if [ -z "$SERVER_IP" ]; then
@@ -77,6 +79,7 @@ write_config_fresh() {
 
   cat > "$BOT_DIR/config.env" <<ENV
 BOT_TOKEN=${BOT_TOKEN}
+OWNER_ID=${OWNER_ID}
 ADMINS=${OWNER_ID}
 SERVER_ENDPOINT=${SERVER_IP}
 AWG_PORT=64936
@@ -88,6 +91,8 @@ BACKUP_CHAT_ID=
 BACKUP_LINK=
 GITHUB_REPO=mkh-python/noora-awg-manager
 GITHUB_BRANCH=main
+LICENSE_REQUIRED=1
+LICENSE_API_URL=${LICENSE_API_URL}
 BACKUP_TIMES_PER_DAY=1
 BACKUP_TIMES=00:00
 PANEL_URL=
@@ -109,15 +114,15 @@ download_manager_files() {
   "$BOT_DIR/venv/bin/pip" install --upgrade pip
   "$BOT_DIR/venv/bin/pip" install -r "$BOT_DIR/requirements.txt"
 
-  wget -qO "$UPDATE_SCRIPT" "$REPO_RAW/scripts/update.sh"
-  chmod +x "$UPDATE_SCRIPT"
-
   wget -qO "$BACKUP_SCRIPT" "$REPO_RAW/scripts/backup.sh"
   chmod +x "$BACKUP_SCRIPT"
 
   if wget -qO "$SEND_BACKUP_SCRIPT" "$REPO_RAW/scripts/send-backup.sh"; then
     chmod +x "$SEND_BACKUP_SCRIPT"
   fi
+
+  wget -qO "$UPDATE_SCRIPT" "$REPO_RAW/scripts/update.sh"
+  chmod +x "$UPDATE_SCRIPT"
 
   wget -qO "$BOT_SERVICE" "$REPO_RAW/systemd/awg-bot.service"
   wget -qO "$BACKUP_SERVICE" "$REPO_RAW/systemd/awg-full-backup.service"

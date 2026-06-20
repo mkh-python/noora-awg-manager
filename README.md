@@ -185,3 +185,36 @@ It will show a menu:
 Before update, reinstall or full wipe, the installer creates a local safety backup in:
 
     /root/noora-awg-before-change-YYYY-MM-DD_HH-MM-SS.tar.gz
+
+## بروزرسانی داخلی ربات
+
+نسخه برنامه در فایل `VERSION` ریشه مخزن نگهداری می‌شود. مالک اصلی ربات از مسیر «مدیریت → بروزرسانی ربات» می‌تواند نسخه نصب‌شده را با شاخه GitHub مقایسه و بروزرسانی کند.
+
+در هر انتشار جدید، مقدار فایل `VERSION` را افزایش دهید؛ برای مثال از `1.0.0` به `1.1.0`. بروزرسانی خودکار فایل‌های اجرایی، اسکریپت‌های بکاپ و سرویس‌های systemd را جایگزین می‌کند، ولی این اطلاعات را حفظ می‌کند:
+
+- `/opt/awg-bot/config.env`
+- `/opt/awg-bot/awg_bot.db`
+- `/opt/awg-bot/venv/`
+- کانفیگ‌ها و کاربران AmneziaWG
+
+تنظیمات مخزن در `config.env`:
+
+```env
+GITHUB_REPO=mkh-python/noora-awg-manager
+GITHUB_BRANCH=main
+```
+
+قبل از هر بروزرسانی، از فایل‌های اجرایی قبلی در `/root/noora-awg-update-backups/` بکاپ ساخته می‌شود.
+
+
+## License system (v1.1.0)
+
+Version 1.1.0 adds optional central license validation. New installations use:
+
+```env
+OWNER_ID=123456789
+LICENSE_REQUIRED=1
+LICENSE_API_URL=https://license.example.com
+```
+
+Existing installations are updated with `LICENSE_REQUIRED=0` to avoid accidental lockout. Configure `LICENSE_API_URL`, then set `LICENSE_REQUIRED=1` and restart `awg-bot.service`.

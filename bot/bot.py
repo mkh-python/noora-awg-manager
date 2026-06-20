@@ -5,6 +5,10 @@ import sqlite3
 import subprocess
 import ipaddress
 import tempfile
+import json
+import uuid
+import urllib.request
+import urllib.error
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -42,11 +46,21 @@ GITHUB_REPO = ENV.get("GITHUB_REPO", "mkh-python/noora-awg-manager").strip()
 GITHUB_BRANCH = ENV.get("GITHUB_BRANCH", "main").strip()
 VERSION_FILE = BASE / "VERSION"
 UPDATE_SCRIPT = Path("/usr/local/bin/noora-awg-update.sh")
-OWNER_ID = 7819156066
+DEFAULT_OWNER_ID = 7819156066
+OWNER_ID = int(ENV.get("OWNER_ID", ENV.get("LICENSE_OWNER_ID", str(DEFAULT_OWNER_ID))).strip() or DEFAULT_OWNER_ID)
+ADMINS.add(OWNER_ID)
 
 CREATOR_USERNAME = "awgdeveloper"
 CREATOR_URL = f"https://t.me/{CREATOR_USERNAME}"
 
+LICENSE_REQUIRED = ENV.get("LICENSE_REQUIRED", "0").strip().lower() in {"1", "true", "yes", "on"}
+LICENSE_API_URL = ENV.get("LICENSE_API_URL", "").strip().rstrip("/")
+LICENSE_INSTALL_ID_FILE = BASE / "INSTALL_ID"
+LICENSE_STATE_FILE = BASE / "license-state.json"
+LICENSE_CACHE_SECONDS = 300
+LICENSE_GRACE_SECONDS = 72 * 60 * 60
+
+PENDING_LICENSE = {}
 PENDING_ADD = {}
 PENDING_EXTEND = {}
 PENDING_MANAGE = {}
@@ -169,6 +183,306 @@ def start_update_job(chat_id):
     ])
 
 
+
+def license_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            ["🔑 وارد کردن لایسنس"],
+            ["📨 درخواست لایسنس رایگان"],
+            ["🔄 بررسی مجدد لایسنس"],
+            ["💬 چت با پشتیبانی"],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
+
+def get_install_id():
+    try:
+        value = LICENSE_INSTALL_ID_FILE.read_text(encoding="utf-8").strip()
+        if value:
+            return value
+    except OSError:
+        pass
+
+    value = str(uuid.uuid4())
+    LICENSE_INSTALL_ID_FILE.write_text(value + "\n", encoding="utf-8")
+    os.chmod(LICENSE_INSTALL_ID_FILE, 0o600)
+    return value
+
+
+def load_license_state():
+    try:
+        data = json.loads(LICENSE_STATE_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def save_license_state(data):
+    LICENSE_STATE_FILE.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    os.chmod(LICENSE_STATE_FILE, 0o600)
+
+
+def license_api_request(path, payload):
+    if not LICENSE_API_URL:
+        raise RuntimeError("آدرس سرور لایسنس تنظیم نشده است.")
+
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        f"{LICENSE_API_URL}{path}",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            raw = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = json.loads(exc.read().decode("utf-8")).get("detail")
+        except Exception:
+            detail = None
+        raise RuntimeError(detail or f"خطای HTTP {exc.code} از سرور لایسنس") from exc
+    except OSError as exc:
+        raise RuntimeError(f"ارتباط با سرور لایسنس برقرار نشد: {exc}") from exc
+
+    try:
+        result = json.loads(raw)
+    except ValueError as exc:
+        raise RuntimeError("پاسخ سرور لایسنس معتبر نیست.") from exc
+
+    if not isinstance(result, dict):
+        raise RuntimeError("پاسخ سرور لایسنس معتبر نیست.")
+    return result
+
+
+def license_payload(user_id, license_key=None):
+    payload = {
+        "telegram_user_id": int(user_id),
+        "install_id": get_install_id(),
+        "version": current_version(),
+    }
+    if license_key:
+        payload["license_key"] = license_key.strip().upper()
+    return payload
+
+
+def check_license_remote(user_id, force=False):
+    if not LICENSE_REQUIRED:
+        return {"valid": True, "status": "not_required", "message": "License disabled"}
+
+    state = load_license_state()
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    checked_at = int(state.get("checked_at", 0) or 0)
+
+    if not force and checked_at and now_ts - checked_at < LICENSE_CACHE_SECONDS:
+        return state
+
+    key = str(state.get("license_key", "")).strip()
+    if not key:
+        return {
+            "valid": False,
+            "status": "missing",
+            "message": "لایسنس هنوز فعال نشده است.",
+        }
+
+    try:
+        result = license_api_request(
+            "/api/v1/license/check",
+            license_payload(user_id, key),
+        )
+        result["license_key"] = key
+        result["checked_at"] = now_ts
+        if result.get("valid"):
+            result["last_success_at"] = now_ts
+        save_license_state(result)
+        return result
+    except Exception as exc:
+        last_success = int(state.get("last_success_at", 0) or 0)
+        if state.get("valid") and last_success and now_ts - last_success <= LICENSE_GRACE_SECONDS:
+            state["grace"] = True
+            state["message"] = "سرور لایسنس موقتاً در دسترس نیست؛ مهلت آفلاین فعال است."
+            return state
+        return {
+            "valid": False,
+            "status": "unavailable",
+            "message": str(exc),
+        }
+
+
+def activate_license_remote(user_id, license_key):
+    result = license_api_request(
+        "/api/v1/license/activate",
+        license_payload(user_id, license_key),
+    )
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    result["license_key"] = license_key.strip().upper()
+    result["checked_at"] = now_ts
+    if result.get("valid"):
+        result["last_success_at"] = now_ts
+        save_license_state(result)
+    return result
+
+
+def request_license_remote(user_id):
+    return license_api_request(
+        "/api/v1/license/request",
+        license_payload(user_id),
+    )
+
+
+def check_request_remote(user_id):
+    result = license_api_request(
+        "/api/v1/license/request/status",
+        license_payload(user_id),
+    )
+    key = str(result.get("license_key", "")).strip()
+    if result.get("status") == "approved" and key:
+        return activate_license_remote(user_id, key)
+    return result
+
+
+def license_locked_text(result=None):
+    result = result or {}
+    status = result.get("status", "missing")
+    message = result.get("message", "لایسنس فعال نیست.")
+    expires = result.get("expires_at")
+
+    text = (
+        "🔒 فعال‌سازی لایسنس Noora AWG\n\n"
+        "استفاده از ربات رایگان است، اما برای فعال‌شدن پنل به لایسنس رایگان نیاز داری.\n\n"
+        f"وضعیت: {status}\n"
+        f"توضیح: {message}"
+    )
+    if expires:
+        text += f"\nتاریخ انقضا: {str(expires)[:10]}"
+    text += "\n\nاز دکمه‌های زیر برای درخواست یا فعال‌سازی استفاده کن."
+    return text
+
+
+async def send_license_screen(update: Update, result=None):
+    message = update.effective_message
+    if message:
+        await message.reply_text(
+            license_locked_text(result),
+            reply_markup=license_keyboard(),
+        )
+
+
+async def license_access_allowed(update: Update, force=False, show=True):
+    if not LICENSE_REQUIRED:
+        return True
+    user = update.effective_user
+    if not user:
+        return False
+    result = await asyncio.to_thread(check_license_remote, user.id, force)
+    if result.get("valid"):
+        return True
+    if show:
+        await send_license_screen(update, result)
+    return False
+
+
+async def handle_license_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (update.message.text or "").strip()
+    uid = update.effective_user.id
+
+    if text == "💬 چت با پشتیبانی":
+        await update.message.reply_text(
+            "برای دریافت لایسنس رایگان با پشتیبانی ارتباط بگیر:\n"
+            f"@{CREATOR_USERNAME}",
+            reply_markup=creator_contact_keyboard(),
+        )
+        return True
+
+    if text == "🔑 وارد کردن لایسنس":
+        PENDING_LICENSE[uid] = "license_key"
+        await update.message.reply_text(
+            "کلید لایسنس را بفرست.\n\nمثال:\nNOORA-XXXX-XXXX-XXXX-XXXX",
+            reply_markup=license_keyboard(),
+        )
+        return True
+
+    if text == "📨 درخواست لایسنس رایگان":
+        try:
+            result = await asyncio.to_thread(request_license_remote, uid)
+            await update.message.reply_text(
+                "✅ درخواست لایسنس ثبت شد.\n\n"
+                f"شماره درخواست: {result.get('request_id', '-')}\n"
+                "بعد از تأیید پشتیبانی، دکمه «بررسی مجدد لایسنس» را بزن.",
+                reply_markup=license_keyboard(),
+            )
+        except Exception as exc:
+            await update.message.reply_text(
+                f"❌ ثبت درخواست ناموفق بود:\n{exc}",
+                reply_markup=license_keyboard(),
+            )
+        return True
+
+    if text == "🔄 بررسی مجدد لایسنس":
+        try:
+            state = load_license_state()
+            if state.get("license_key"):
+                result = await asyncio.to_thread(check_license_remote, uid, True)
+            else:
+                result = await asyncio.to_thread(check_request_remote, uid)
+
+            if result.get("valid"):
+                await update.message.reply_text(
+                    "✅ لایسنس فعال شد و پنل آماده استفاده است.",
+                    reply_markup=main_keyboard(uid),
+                )
+            else:
+                await update.message.reply_text(
+                    license_locked_text(result),
+                    reply_markup=license_keyboard(),
+                )
+        except Exception as exc:
+            await update.message.reply_text(
+                f"❌ بررسی لایسنس ناموفق بود:\n{exc}",
+                reply_markup=license_keyboard(),
+            )
+        return True
+
+    if PENDING_LICENSE.get(uid) == "license_key":
+        key = text.strip().upper()
+        if not re.fullmatch(r"NOORA(?:-[A-Z0-9]{4}){4}", key):
+            await update.message.reply_text(
+                "فرمت کلید معتبر نیست. دوباره کلید کامل را بفرست.",
+                reply_markup=license_keyboard(),
+            )
+            return True
+
+        try:
+            result = await asyncio.to_thread(activate_license_remote, uid, key)
+            PENDING_LICENSE.pop(uid, None)
+            if result.get("valid"):
+                await update.message.reply_text(
+                    "✅ لایسنس با موفقیت فعال شد.\n\n"
+                    f"اعتبار تا: {str(result.get('expires_at', '-'))[:10]}",
+                    reply_markup=main_keyboard(uid),
+                )
+            else:
+                await update.message.reply_text(
+                    license_locked_text(result),
+                    reply_markup=license_keyboard(),
+                )
+        except Exception as exc:
+            PENDING_LICENSE.pop(uid, None)
+            await update.message.reply_text(
+                f"❌ فعال‌سازی ناموفق بود:\n{exc}",
+                reply_markup=license_keyboard(),
+            )
+        return True
+
+    await send_license_screen(update, await asyncio.to_thread(check_license_remote, uid, False))
+    return True
+
 def owner_only_keyboard():
     return InlineKeyboardMarkup([
         [
@@ -205,6 +519,8 @@ def owner_only_keyboard():
 async def guard(update: Update):
     if not is_admin(update):
         await update.message.reply_text("Access denied.")
+        return False
+    if not await license_access_allowed(update):
         return False
     return True
 
@@ -705,7 +1021,10 @@ async def show_menu_message(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await guard(update):
+    if not is_admin(update):
+        await update.message.reply_text("Access denied.")
+        return
+    if not await license_access_allowed(update):
         return
     await show_menu_message(update, context)
 
@@ -717,6 +1036,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not query.from_user or query.from_user.id not in ADMINS:
         await query.edit_message_text("Access denied.")
         return
+
+    if LICENSE_REQUIRED:
+        result = await asyncio.to_thread(check_license_remote, query.from_user.id, False)
+        if not result.get("valid"):
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=license_locked_text(result),
+                reply_markup=license_keyboard(),
+            )
+            return
 
     if is_busy():
         await query.answer(busy_text(), show_alert=True)
@@ -1291,6 +1624,12 @@ async def main_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = (update.message.text or "").strip()
     uid = update.effective_user.id
+
+    if LICENSE_REQUIRED:
+        result = await asyncio.to_thread(check_license_remote, uid, False)
+        if not result.get("valid"):
+            await handle_license_text(update, context)
+            return
 
     if is_busy():
         await update.message.reply_text(
@@ -2142,6 +2481,12 @@ async def add_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     uid = update.effective_user.id
+
+    if LICENSE_REQUIRED:
+        result = await asyncio.to_thread(check_license_remote, uid, False)
+        if not result.get("valid"):
+            await handle_license_text(update, context)
+            return
 
     if uid in PENDING_MANAGE:
         handled = await manage_flow_handler(update, context)
