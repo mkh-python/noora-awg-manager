@@ -9,6 +9,7 @@ BACKUP_SERVICE="/etc/systemd/system/awg-full-backup.service"
 BACKUP_TIMER="/etc/systemd/system/awg-full-backup.timer"
 BACKUP_SCRIPT="/usr/local/bin/awg-full-backup.sh"
 SEND_BACKUP_SCRIPT="/usr/local/bin/awg-send-backup-telegram.sh"
+UPDATE_SCRIPT="/usr/local/bin/noora-awg-update.sh"
 
 AWG_DIR="/etc/amnezia"
 AWG_WEB_DIR="/etc/amneziawg-web"
@@ -85,6 +86,8 @@ CLIENT_DIR=/etc/amnezia/amneziawg/clients
 DNS=1.1.1.1,1.0.0.1
 BACKUP_CHAT_ID=
 BACKUP_LINK=
+GITHUB_REPO=mkh-python/noora-awg-manager
+GITHUB_BRANCH=main
 BACKUP_TIMES_PER_DAY=1
 BACKUP_TIMES=00:00
 PANEL_URL=
@@ -104,6 +107,9 @@ download_manager_files() {
   python3 -m venv "$BOT_DIR/venv"
   "$BOT_DIR/venv/bin/pip" install --upgrade pip
   "$BOT_DIR/venv/bin/pip" install -r "$BOT_DIR/requirements.txt"
+
+  wget -qO "$UPDATE_SCRIPT" "$REPO_RAW/scripts/update.sh"
+  chmod +x "$UPDATE_SCRIPT"
 
   wget -qO "$BACKUP_SCRIPT" "$REPO_RAW/scripts/backup.sh"
   chmod +x "$BACKUP_SCRIPT"
