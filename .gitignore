@@ -1,0 +1,10 @@
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Local databases and runtime state
+*.db
+*.db-*
+license-state.json
+INSTALL_ID
