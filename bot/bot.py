@@ -6,9 +6,6 @@ import subprocess
 import ipaddress
 import tempfile
 import json
-import uuid
-import urllib.request
-import urllib.error
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -47,21 +44,13 @@ GITHUB_BRANCH = ENV.get("GITHUB_BRANCH", "main").strip()
 VERSION_FILE = BASE / "VERSION"
 UPDATE_SCRIPT = Path("/usr/local/bin/noora-awg-update.sh")
 DEFAULT_OWNER_ID = 7819156066
-OWNER_ID = int(ENV.get("OWNER_ID", ENV.get("LICENSE_OWNER_ID", str(DEFAULT_OWNER_ID))).strip() or DEFAULT_OWNER_ID)
+OWNER_ID = int(ENV.get("OWNER_ID", str(DEFAULT_OWNER_ID)).strip() or DEFAULT_OWNER_ID)
 ADMINS.add(OWNER_ID)
 
 CREATOR_USERNAME = "awgdeveloper"
 CREATOR_URL = f"https://t.me/{CREATOR_USERNAME}"
 
-LICENSE_REQUIRED = ENV.get("LICENSE_REQUIRED", "0").strip().lower() in {"1", "true", "yes", "on"}
-LICENSE_API_URL = ENV.get("LICENSE_API_URL", "").strip().rstrip("/")
-SUPPORT_USERNAME = ENV.get("SUPPORT_USERNAME", "@awgdeveloper").strip()
-LICENSE_INSTALL_ID_FILE = BASE / "INSTALL_ID"
-LICENSE_STATE_FILE = BASE / "license-state.json"
-LICENSE_CACHE_SECONDS = 300
-LICENSE_GRACE_SECONDS = 72 * 60 * 60
 
-PENDING_LICENSE = {}
 PENDING_ADD = {}
 PENDING_EXTEND = {}
 PENDING_MANAGE = {}
@@ -89,11 +78,11 @@ def awg(*args):
 
 
 def busy_text():
-    title = BOT_BUSY.get("title") or "یک عملیات مدیریتی"
+    title = BOT_BUSY.get("title") or "غŒع© ط¹ظ…ظ„غŒط§طھ ظ…ط¯غŒط±غŒطھغŒ"
     return (
-        f"⏳ {title} در حال انجام است.\n\n"
-        "تا پایان عملیات، دکمه‌ها و دستورها موقتاً غیرفعال هستند.\n"
-        "چند لحظه صبر کن."
+        f"âڈ³ {title} ط¯ط± ط­ط§ظ„ ط§ظ†ط¬ط§ظ… ط§ط³طھ.\n\n"
+        "طھط§ ظ¾ط§غŒط§ظ† ط¹ظ…ظ„غŒط§طھطŒ ط¯ع©ظ…ظ‡â€Œظ‡ط§ ظˆ ط¯ط³طھظˆط±ظ‡ط§ ظ…ظˆظ‚طھط§ظ‹ ط؛غŒط±ظپط¹ط§ظ„ ظ‡ط³طھظ†ط¯.\n"
+        "ع†ظ†ط¯ ظ„ط­ط¸ظ‡ طµط¨ط± ع©ظ†."
     )
 
 
@@ -168,13 +157,13 @@ def latest_version():
 
     pattern = r"[0-9]+(?:\.[0-9]+){1,3}(?:[-+][0-9A-Za-z.-]+)?"
     if not re.fullmatch(pattern, value):
-        raise RuntimeError("شماره نسخه دریافت‌شده از GitHub معتبر نیست.")
+        raise RuntimeError("ط´ظ…ط§ط±ظ‡ ظ†ط³ط®ظ‡ ط¯ط±غŒط§ظپطھâ€Œط´ط¯ظ‡ ط§ط² GitHub ظ…ط¹طھط¨ط± ظ†غŒط³طھ.")
     return value
 
 
 def start_update_job(chat_id):
     if not UPDATE_SCRIPT.exists():
-        raise RuntimeError(f"اسکریپت بروزرسانی پیدا نشد: {UPDATE_SCRIPT}")
+        raise RuntimeError(f"ط§ط³ع©ط±غŒظ¾طھ ط¨ط±ظˆط²ط±ط³ط§ظ†غŒ ظ¾غŒط¯ط§ ظ†ط´ط¯: {UPDATE_SCRIPT}")
 
     run([
         "systemd-run",
@@ -185,367 +174,35 @@ def start_update_job(chat_id):
 
 
 
-def license_keyboard():
-    return ReplyKeyboardMarkup(
-        [
-            ["🔑 وارد کردن لایسنس"],
-            ["📨 درخواست لایسنس رایگان"],
-            ["🔄 بررسی مجدد لایسنس"],
-            ["💬 چت با پشتیبانی"],
-        ],
-        resize_keyboard=True,
-        is_persistent=True,
-    )
-
-
-def get_install_id():
-    try:
-        value = LICENSE_INSTALL_ID_FILE.read_text(encoding="utf-8").strip()
-        if value:
-            return value
-    except OSError:
-        pass
-
-    value = str(uuid.uuid4())
-    LICENSE_INSTALL_ID_FILE.write_text(value + "\n", encoding="utf-8")
-    os.chmod(LICENSE_INSTALL_ID_FILE, 0o600)
-    return value
-
-
-def load_license_state():
-    try:
-        data = json.loads(LICENSE_STATE_FILE.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError, TypeError):
-        return {}
-
-
-def save_license_state(data):
-    LICENSE_STATE_FILE.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    os.chmod(LICENSE_STATE_FILE, 0o600)
-
-
-def license_api_request(path, payload):
-    if not LICENSE_API_URL:
-        raise RuntimeError("آدرس سرور لایسنس تنظیم نشده است.")
-
-    body = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        f"{LICENSE_API_URL}{path}",
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            raw = response.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        try:
-            detail = json.loads(exc.read().decode("utf-8")).get("detail")
-        except Exception:
-            detail = None
-        raise RuntimeError(detail or f"خطای HTTP {exc.code} از سرور لایسنس") from exc
-    except OSError as exc:
-        raise RuntimeError(f"ارتباط با سرور لایسنس برقرار نشد: {exc}") from exc
-
-    try:
-        result = json.loads(raw)
-    except ValueError as exc:
-        raise RuntimeError("پاسخ سرور لایسنس معتبر نیست.") from exc
-
-    if not isinstance(result, dict):
-        raise RuntimeError("پاسخ سرور لایسنس معتبر نیست.")
-    return result
-
-
-def license_payload(user_id, license_key=None, telegram_username="", full_name="", phone=""):
-    payload = {
-        "telegram_user_id": int(user_id),
-        "install_id": get_install_id(),
-        "version": current_version(),
-    }
-    if license_key:
-        payload["license_key"] = license_key.strip().upper()
-    if telegram_username:
-        payload["telegram_username"] = str(telegram_username).lstrip("@")
-    if full_name:
-        payload["full_name"] = str(full_name)
-    if phone:
-        payload["phone"] = str(phone)
-    return payload
-
-
-def check_license_remote(user_id, force=False):
-    if not LICENSE_REQUIRED:
-        return {"valid": True, "status": "not_required", "message": "License disabled"}
-
-    state = load_license_state()
-    now_ts = int(datetime.now(timezone.utc).timestamp())
-    checked_at = int(state.get("checked_at", 0) or 0)
-
-    if not force and checked_at and now_ts - checked_at < LICENSE_CACHE_SECONDS:
-        return state
-
-    key = str(state.get("license_key", "")).strip()
-    if not key:
-        return {
-            "valid": False,
-            "status": "missing",
-            "message": "لایسنس هنوز فعال نشده است.",
-        }
-
-    try:
-        result = license_api_request(
-            "/api/v1/license/check",
-            license_payload(user_id, key),
-        )
-        result["license_key"] = key
-        result["checked_at"] = now_ts
-        if result.get("valid"):
-            result["last_success_at"] = now_ts
-        save_license_state(result)
-        return result
-    except Exception as exc:
-        last_success = int(state.get("last_success_at", 0) or 0)
-        if state.get("valid") and last_success and now_ts - last_success <= LICENSE_GRACE_SECONDS:
-            state["grace"] = True
-            state["message"] = "سرور لایسنس موقتاً در دسترس نیست؛ مهلت آفلاین فعال است."
-            return state
-        return {
-            "valid": False,
-            "status": "unavailable",
-            "message": str(exc),
-        }
-
-
-def activate_license_remote(user_id, license_key):
-    result = license_api_request(
-        "/api/v1/license/activate",
-        license_payload(user_id, license_key),
-    )
-    now_ts = int(datetime.now(timezone.utc).timestamp())
-    result["license_key"] = license_key.strip().upper()
-    result["checked_at"] = now_ts
-    if result.get("valid"):
-        result["last_success_at"] = now_ts
-        save_license_state(result)
-    return result
-
-
-def request_license_remote(user_id, telegram_username="", full_name=""):
-    return license_api_request(
-        "/api/v1/license/request",
-        license_payload(user_id, telegram_username=telegram_username, full_name=full_name),
-    )
-
-
-def check_request_remote(user_id):
-    result = license_api_request(
-        "/api/v1/license/request/status",
-        license_payload(user_id),
-    )
-    key = str(result.get("license_key", "")).strip()
-    if result.get("status") == "approved" and key:
-        return activate_license_remote(user_id, key)
-    return result
-
-
-def license_locked_text(result=None):
-    result = result or {}
-    status = result.get("status", "missing")
-    message = result.get("message", "لایسنس فعال نیست.")
-    expires = result.get("expires_at")
-
-    text = (
-        "🔒 فعال‌سازی لایسنس Noora AWG\n\n"
-        "استفاده از ربات رایگان است، اما برای فعال‌شدن پنل به لایسنس رایگان نیاز داری.\n\n"
-        f"وضعیت: {status}\n"
-        f"توضیح: {message}"
-    )
-    if expires:
-        text += f"\nتاریخ انقضا: {str(expires)[:10]}"
-    text += "\n\nاز دکمه‌های زیر برای درخواست یا فعال‌سازی استفاده کن."
-    return text
-
-
-async def send_license_screen(update: Update, result=None):
-    message = update.effective_message
-    if message:
-        await message.reply_text(
-            license_locked_text(result),
-            reply_markup=license_keyboard(),
-        )
-
-
-async def license_access_allowed(update: Update, force=False, show=True):
-    if not LICENSE_REQUIRED:
-        return True
-    user = update.effective_user
-    if not user:
-        return False
-    result = await asyncio.to_thread(check_license_remote, user.id, force)
-    if result.get("valid"):
-        return True
-    if show:
-        await send_license_screen(update, result)
-    return False
-
-
-async def handle_license_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (update.message.text or "").strip()
-    uid = update.effective_user.id
-
-    if text == "💬 چت با پشتیبانی":
-        await update.message.reply_text(
-            "برای دریافت لایسنس رایگان با پشتیبانی ارتباط بگیر:\n"
-            f"@{CREATOR_USERNAME}",
-            reply_markup=creator_contact_keyboard(),
-        )
-        return True
-
-    if text == "🔑 وارد کردن لایسنس":
-        PENDING_LICENSE[uid] = "license_key"
-        await update.message.reply_text(
-            "کلید لایسنس را بفرست.\n\nمثال:\nNOORA-XXXX-XXXX-XXXX-XXXX",
-            reply_markup=license_keyboard(),
-        )
-        return True
-
-    if text == "📨 درخواست لایسنس رایگان":
-        try:
-            result = await asyncio.to_thread(
-                request_license_remote,
-                uid,
-                update.effective_user.username or "",
-                update.effective_user.full_name or "",
-            )
-            status = str(result.get("status", "")).strip().lower()
-            request_id = result.get("request_id")
-
-            if status == "license_exists":
-                await update.message.reply_text(
-                    "ℹ️ برای حساب شما از قبل لایسنس فعال وجود دارد.\n\n"
-                    "دکمه «🔑 وارد کردن لایسنس» را بزن و کلید موجود را وارد کن.",
-                    reply_markup=license_keyboard(),
-                )
-                return True
-
-            if not request_id:
-                message = str(result.get("message", "پاسخ سرور ناقص بود.")).strip()
-                await update.message.reply_text(
-                    "❌ درخواست جدید ثبت نشد.\n\n"
-                    f"توضیح: {message}",
-                    reply_markup=license_keyboard(),
-                )
-                return True
-
-            await update.message.reply_text(
-                "✅ درخواست لایسنس ثبت شد.\n\n"
-                f"شماره درخواست: {request_id}\n"
-                "بعد از تأیید پشتیبانی، دکمه «بررسی مجدد لایسنس» را بزن.\n\n"
-                "اگر تا ۱۰ دقیقه آینده لایسنس فعال نشد، به پشتیبانی پیام بده:\n"
-                f"{SUPPORT_USERNAME}",
-                reply_markup=license_keyboard(),
-            )
-        except Exception as exc:
-            await update.message.reply_text(
-                f"❌ ثبت درخواست ناموفق بود:\n{exc}",
-                reply_markup=license_keyboard(),
-            )
-        return True
-
-    if text == "🔄 بررسی مجدد لایسنس":
-        try:
-            state = load_license_state()
-            if state.get("license_key"):
-                result = await asyncio.to_thread(check_license_remote, uid, True)
-            else:
-                result = await asyncio.to_thread(check_request_remote, uid)
-
-            if result.get("valid"):
-                await update.message.reply_text(
-                    "✅ لایسنس فعال شد و پنل آماده استفاده است.",
-                    reply_markup=main_keyboard(uid),
-                )
-            else:
-                await update.message.reply_text(
-                    license_locked_text(result),
-                    reply_markup=license_keyboard(),
-                )
-        except Exception as exc:
-            await update.message.reply_text(
-                f"❌ بررسی لایسنس ناموفق بود:\n{exc}",
-                reply_markup=license_keyboard(),
-            )
-        return True
-
-    if PENDING_LICENSE.get(uid) == "license_key":
-        key = text.strip().upper()
-        if not re.fullmatch(r"NOORA(?:-[A-Z0-9]{4}){4}", key):
-            await update.message.reply_text(
-                "فرمت کلید معتبر نیست. دوباره کلید کامل را بفرست.",
-                reply_markup=license_keyboard(),
-            )
-            return True
-
-        try:
-            result = await asyncio.to_thread(activate_license_remote, uid, key)
-            PENDING_LICENSE.pop(uid, None)
-            if result.get("valid"):
-                await update.message.reply_text(
-                    "✅ لایسنس با موفقیت فعال شد.\n\n"
-                    f"اعتبار تا: {str(result.get('expires_at', '-'))[:10]}",
-                    reply_markup=main_keyboard(uid),
-                )
-            else:
-                await update.message.reply_text(
-                    license_locked_text(result),
-                    reply_markup=license_keyboard(),
-                )
-        except Exception as exc:
-            PENDING_LICENSE.pop(uid, None)
-            await update.message.reply_text(
-                f"❌ فعال‌سازی ناموفق بود:\n{exc}",
-                reply_markup=license_keyboard(),
-            )
-        return True
-
-    await send_license_screen(update, await asyncio.to_thread(check_license_remote, uid, False))
-    return True
-
 def owner_only_keyboard():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("👥 نمایش ادمین‌ها", callback_data="manage:list_admins"),
+            InlineKeyboardButton("ًں‘¥ ظ†ظ…ط§غŒط´ ط§ط¯ظ…غŒظ†â€Œظ‡ط§", callback_data="manage:list_admins"),
         ],
         [
-            InlineKeyboardButton("➕ افزودن ادمین", callback_data="manage:add_admin"),
-            InlineKeyboardButton("➖ حذف ادمین", callback_data="manage:remove_admin"),
+            InlineKeyboardButton("â‍• ط§ظپط²ظˆط¯ظ† ط§ط¯ظ…غŒظ†", callback_data="manage:add_admin"),
+            InlineKeyboardButton("â‍– ط­ط°ظپ ط§ط¯ظ…غŒظ†", callback_data="manage:remove_admin"),
         ],
         [
-            InlineKeyboardButton("📦 تنظیم کانال بکاپ", callback_data="manage:set_backup_channel"),
+            InlineKeyboardButton("ًں“¦ طھظ†ط¸غŒظ… ع©ط§ظ†ط§ظ„ ط¨ع©ط§ظ¾", callback_data="manage:set_backup_channel"),
         ],
         [
-            InlineKeyboardButton("🌐 تنظیم دامنه و SSL", callback_data="manage:set_domain_ssl"),
+            InlineKeyboardButton("ًںŒگ طھظ†ط¸غŒظ… ط¯ط§ظ…ظ†ظ‡ ظˆ SSL", callback_data="manage:set_domain_ssl"),
         ],
         [
-            InlineKeyboardButton("💾 گرفتن بکاپ کامل", callback_data="manage:backup_now"),
+            InlineKeyboardButton("ًں’¾ ع¯ط±ظپطھظ† ط¨ع©ط§ظ¾ ع©ط§ظ…ظ„", callback_data="manage:backup_now"),
         ],
         [
-            InlineKeyboardButton("🔁 تعداد بکاپ روزانه", callback_data="manage:set_backup_time"),
+            InlineKeyboardButton("ًں”پ طھط¹ط¯ط§ط¯ ط¨ع©ط§ظ¾ ط±ظˆط²ط§ظ†ظ‡", callback_data="manage:set_backup_time"),
         ],
         [
-            InlineKeyboardButton("⬆️ بروزرسانی ربات", callback_data="manage:update_bot"),
+            InlineKeyboardButton("â¬†ï¸ڈ ط¨ط±ظˆط²ط±ط³ط§ظ†غŒ ط±ط¨ط§طھ", callback_data="manage:update_bot"),
         ],
         [
-            InlineKeyboardButton("📋 نمایش تنظیمات", callback_data="manage:show_settings"),
+            InlineKeyboardButton("ًں“‹ ظ†ظ…ط§غŒط´ طھظ†ط¸غŒظ…ط§طھ", callback_data="manage:show_settings"),
         ],
         [
-            InlineKeyboardButton("⬅️ بازگشت", callback_data="menu:back"),
+            InlineKeyboardButton("â¬…ï¸ڈ ط¨ط§ط²ع¯ط´طھ", callback_data="menu:back"),
         ],
     ])
 
@@ -553,8 +210,6 @@ def owner_only_keyboard():
 async def guard(update: Update):
     if not is_admin(update):
         await update.message.reply_text("Access denied.")
-        return False
-    if not await license_access_allowed(update):
         return False
     return True
 
@@ -938,16 +593,16 @@ def update_traffic_and_enforce():
 
 def main_keyboard(user_id=None):
     rows = [
-        ["➕ ساخت کاربر", "📋 لیست کاربران"],
-        ["📱 QR کاربر", "📄 فایل کانفیگ"],
-        ["⛔ غیرفعال", "✅ فعال‌سازی"],
-        ["➕ تمدید حجم/روز", "🗑 حذف کاربر"],
-        ["📊 وضعیت سرور", "🆔 دریافت ID"],
-        ["💬 چت با سازنده"],
+        ["â‍• ط³ط§ط®طھ ع©ط§ط±ط¨ط±", "ًں“‹ ظ„غŒط³طھ ع©ط§ط±ط¨ط±ط§ظ†"],
+        ["ًں“± QR ع©ط§ط±ط¨ط±", "ًں“„ ظپط§غŒظ„ ع©ط§ظ†ظپغŒع¯"],
+        ["â›” ط؛غŒط±ظپط¹ط§ظ„", "âœ… ظپط¹ط§ظ„â€Œط³ط§ط²غŒ"],
+        ["â‍• طھظ…ط¯غŒط¯ ط­ط¬ظ…/ط±ظˆط²", "ًں—‘ ط­ط°ظپ ع©ط§ط±ط¨ط±"],
+        ["ًں“ٹ ظˆط¶ط¹غŒطھ ط³ط±ظˆط±", "ًں†” ط¯ط±غŒط§ظپطھ ID"],
+        ["ًں’¬ ع†طھ ط¨ط§ ط³ط§ط²ظ†ط¯ظ‡"],
     ]
 
     if user_id == OWNER_ID:
-        rows.append(["⚙️ مدیریت"])
+        rows.append(["âڑ™ï¸ڈ ظ…ط¯غŒط±غŒطھ"])
 
     return ReplyKeyboardMarkup(
         rows,
@@ -960,7 +615,7 @@ def creator_contact_keyboard():
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
-                "💬 شروع چت با سازنده",
+                "ًں’¬ ط´ط±ظˆط¹ ع†طھ ط¨ط§ ط³ط§ط²ظ†ط¯ظ‡",
                 url=CREATOR_URL,
             ),
         ],
@@ -969,7 +624,7 @@ def creator_contact_keyboard():
 
 def back_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⬅️ بازگشت به منو", callback_data="menu:back")]
+        [InlineKeyboardButton("â¬…ï¸ڈ ط¨ط§ط²ع¯ط´طھ ط¨ظ‡ ظ…ظ†ظˆ", callback_data="menu:back")]
     ])
 
 
@@ -996,7 +651,7 @@ async def send_inline(update: Update, context: ContextTypes.DEFAULT_TYPE, text: 
 async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await delete_last_inline(context, update.effective_chat.id, update.effective_user.id)
     await update.message.reply_text(
-        "پنل مدیریت AmneziaWG آماده است.",
+        "ظ¾ظ†ظ„ ظ…ط¯غŒط±غŒطھ AmneziaWG ط¢ظ…ط§ط¯ظ‡ ط§ط³طھ.",
         reply_markup=main_keyboard(update.effective_user.id if update.effective_user else None)
     )
 
@@ -1016,7 +671,7 @@ def users_action_keyboard(action):
 
     for r in rows:
         name = r["name"]
-        status = "✅" if r["enabled"] else "⛔"
+        status = "âœ…" if r["enabled"] else "â›”"
         row_buttons.append(
             InlineKeyboardButton(f"{status} {name}", callback_data=f"user:{action}:{name}")
         )
@@ -1027,7 +682,7 @@ def users_action_keyboard(action):
     if row_buttons:
         buttons.append(row_buttons)
 
-    buttons.append([InlineKeyboardButton("⬅️ بازگشت به منو", callback_data="menu:back")])
+    buttons.append([InlineKeyboardButton("â¬…ï¸ڈ ط¨ط§ط²ع¯ط´طھ ط¨ظ‡ ظ…ظ†ظˆ", callback_data="menu:back")])
     return InlineKeyboardMarkup(buttons)
 
 
@@ -1047,7 +702,7 @@ async def show_menu_message(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         LAST_INLINE.pop(update.callback_query.from_user.id, None)
         await context.bot.send_message(
             chat_id=update.callback_query.message.chat_id,
-            text="پنل مدیریت AmneziaWG آماده است.",
+            text="ظ¾ظ†ظ„ ظ…ط¯غŒط±غŒطھ AmneziaWG ط¢ظ…ط§ط¯ظ‡ ط§ط³طھ.",
             reply_markup=main_keyboard(update.effective_user.id if update.effective_user else None)
         )
     else:
@@ -1057,8 +712,6 @@ async def show_menu_message(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         await update.message.reply_text("Access denied.")
-        return
-    if not await license_access_allowed(update):
         return
     await show_menu_message(update, context)
 
@@ -1071,19 +724,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Access denied.")
         return
 
-    if LICENSE_REQUIRED:
-        result = await asyncio.to_thread(check_license_remote, query.from_user.id, False)
-        if not result.get("valid"):
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            await context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text=license_locked_text(result),
-                reply_markup=license_keyboard(),
-            )
-            return
 
     if is_busy():
         await query.answer(busy_text(), show_alert=True)
@@ -1099,7 +739,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         LAST_INLINE.pop(query.from_user.id, None)
         await context.bot.send_message(
             chat_id=query.message.chat_id,
-            text="به منوی اصلی برگشتی.",
+            text="ط¨ظ‡ ظ…ظ†ظˆغŒ ط§طµظ„غŒ ط¨ط±ع¯ط´طھغŒ.",
             reply_markup=main_keyboard(update.effective_user.id if update.effective_user else None)
         )
         return
@@ -1107,10 +747,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "menu:add":
         PENDING_ADD[query.from_user.id] = {"step": "name"}
         await query.edit_message_text(
-            "اسم کاربر جدید را بفرست.\n\n"
-            "مثال:\n"
+            "ط§ط³ظ… ع©ط§ط±ط¨ط± ط¬ط¯غŒط¯ ط±ط§ ط¨ظپط±ط³طھ.\n\n"
+            "ظ…ط«ط§ظ„:\n"
             "noora\n\n"
-            "فقط حروف انگلیسی، عدد، خط تیره و آندرلاین مجاز است.",
+            "ظپظ‚ط· ط­ط±ظˆظپ ط§ظ†ع¯ظ„غŒط³غŒطŒ ط¹ط¯ط¯طŒ ط®ط· طھغŒط±ظ‡ ظˆ ط¢ظ†ط¯ط±ظ„ط§غŒظ† ظ…ط¬ط§ط² ط§ط³طھ.",
             reply_markup=back_keyboard(),
         )
         return
@@ -1123,64 +763,64 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             con.close()
 
             if not rows:
-                text = "کاربری وجود ندارد."
+                text = "ع©ط§ط±ط¨ط±غŒ ظˆط¬ظˆط¯ ظ†ط¯ط§ط±ط¯."
             else:
                 msg = []
                 for r in rows:
                     used = r["total_rx"] + r["total_tx"]
                     limit = r["limit_bytes"]
-                    status = "فعال ✅" if r["enabled"] else "غیرفعال ⛔"
+                    status = "ظپط¹ط§ظ„ âœ…" if r["enabled"] else "ط؛غŒط±ظپط¹ط§ظ„ â›”"
                     msg.append(
                         f"{r['name']} | {status}\n"
-                        f"مصرف: {human_bytes(used)} / {human_bytes(limit)}\n"
-                        f"انقضا: {r['expire_at'][:10]}\n"
+                        f"ظ…طµط±ظپ: {human_bytes(used)} / {human_bytes(limit)}\n"
+                        f"ط§ظ†ظ‚ط¶ط§: {r['expire_at'][:10]}\n"
                         f"IP: {r['ipv4']}"
                     )
                 text = "\n\n".join(msg)
         except Exception as e:
-            text = f"خطا:\n{e}"
+            text = f"ط®ط·ط§:\n{e}"
 
         await query.edit_message_text(text[:3900], reply_markup=back_keyboard())
         return
 
     if data == "menu:qr":
         await query.edit_message_text(
-            "برای دریافت QR، کاربر را انتخاب کن:",
+            "ط¨ط±ط§غŒ ط¯ط±غŒط§ظپطھ QRطŒ ع©ط§ط±ط¨ط± ط±ط§ ط§ظ†طھط®ط§ط¨ ع©ظ†:",
             reply_markup=users_action_keyboard("qr"),
         )
         return
 
     if data == "menu:config":
         await query.edit_message_text(
-            "برای دریافت فایل کانفیگ، کاربر را انتخاب کن:",
+            "ط¨ط±ط§غŒ ط¯ط±غŒط§ظپطھ ظپط§غŒظ„ ع©ط§ظ†ظپغŒع¯طŒ ع©ط§ط±ط¨ط± ط±ط§ ط§ظ†طھط®ط§ط¨ ع©ظ†:",
             reply_markup=users_action_keyboard("config"),
         )
         return
 
     if data == "menu:disable":
         await query.edit_message_text(
-            "برای غیرفعال کردن، کاربر را انتخاب کن:",
+            "ط¨ط±ط§غŒ ط؛غŒط±ظپط¹ط§ظ„ ع©ط±ط¯ظ†طŒ ع©ط§ط±ط¨ط± ط±ط§ ط§ظ†طھط®ط§ط¨ ع©ظ†:",
             reply_markup=users_action_keyboard("disable"),
         )
         return
 
     if data == "menu:enable":
         await query.edit_message_text(
-            "برای فعال‌سازی، کاربر را انتخاب کن:",
+            "ط¨ط±ط§غŒ ظپط¹ط§ظ„â€Œط³ط§ط²غŒطŒ ع©ط§ط±ط¨ط± ط±ط§ ط§ظ†طھط®ط§ط¨ ع©ظ†:",
             reply_markup=users_action_keyboard("enable"),
         )
         return
 
     if data == "menu:delete":
         await query.edit_message_text(
-            "برای حذف کامل، کاربر را انتخاب کن:",
+            "ط¨ط±ط§غŒ ط­ط°ظپ ع©ط§ظ…ظ„طŒ ع©ط§ط±ط¨ط± ط±ط§ ط§ظ†طھط®ط§ط¨ ع©ظ†:",
             reply_markup=users_action_keyboard("delete"),
         )
         return
 
     if data == "menu:extend":
         await query.edit_message_text(
-            "تمدید حجم و روز:\n\n/extend name gb days\n\nمثال:\n/extend noora 10 15\n\nیعنی ۱۰ گیگ و ۱۵ روز به کاربر اضافه می‌شود.",
+            "طھظ…ط¯غŒط¯ ط­ط¬ظ… ظˆ ط±ظˆط²:\n\n/extend name gb days\n\nظ…ط«ط§ظ„:\n/extend noora 10 15\n\nغŒط¹ظ†غŒ غ±غ° ع¯غŒع¯ ظˆ غ±غµ ط±ظˆط² ط¨ظ‡ ع©ط§ط±ط¨ط± ط§ط¶ط§ظپظ‡ ظ…غŒâ€Œط´ظˆط¯.",
             reply_markup=back_keyboard(),
         )
         return
@@ -1190,7 +830,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _, action, name = data.split(":", 2)
             row = get_user_row(name)
             if not row:
-                await query.edit_message_text("کاربر پیدا نشد.", reply_markup=back_keyboard())
+                await query.edit_message_text("ع©ط§ط±ط¨ط± ظ¾غŒط¯ط§ ظ†ط´ط¯.", reply_markup=back_keyboard())
                 return
 
             LAST_INLINE.pop(query.from_user.id, None)
@@ -1198,31 +838,31 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if action == "qr":
                 path = CLIENT_DIR / f"awg0-client-{name}.conf"
                 if not path.exists():
-                    await query.edit_message_text("فایل کانفیگ پیدا نشد.", reply_markup=back_keyboard())
+                    await query.edit_message_text("ظپط§غŒظ„ ع©ط§ظ†ظپغŒع¯ ظ¾غŒط¯ط§ ظ†ط´ط¯.", reply_markup=back_keyboard())
                     return
                 png = qr_png(path.read_text())
                 await context.bot.send_photo(chat_id=query.message.chat_id, photo=open(png, "rb"), caption=f"QR: {name}")
                 os.unlink(png)
-                await query.edit_message_text("QR ارسال شد.", reply_markup=back_keyboard())
+                await query.edit_message_text("QR ط§ط±ط³ط§ظ„ ط´ط¯.", reply_markup=back_keyboard())
                 return
 
             if action == "config":
                 path = CLIENT_DIR / f"awg0-client-{name}.conf"
                 if not path.exists():
-                    await query.edit_message_text("فایل کانفیگ پیدا نشد.", reply_markup=back_keyboard())
+                    await query.edit_message_text("ظپط§غŒظ„ ع©ط§ظ†ظپغŒع¯ ظ¾غŒط¯ط§ ظ†ط´ط¯.", reply_markup=back_keyboard())
                     return
                 await context.bot.send_document(chat_id=query.message.chat_id, document=open(path, "rb"), filename=path.name)
-                await query.edit_message_text("فایل کانفیگ ارسال شد.", reply_markup=back_keyboard())
+                await query.edit_message_text("ظپط§غŒظ„ ع©ط§ظ†ظپغŒع¯ ط§ط±ط³ط§ظ„ ط´ط¯.", reply_markup=back_keyboard())
                 return
 
             if action == "disable":
                 disable_user(name)
-                await query.edit_message_text(f"کاربر {name} غیرفعال شد.", reply_markup=back_keyboard())
+                await query.edit_message_text(f"ع©ط§ط±ط¨ط± {name} ط؛غŒط±ظپط¹ط§ظ„ ط´ط¯.", reply_markup=back_keyboard())
                 return
 
             if action == "enable":
                 enable_user(name)
-                await query.edit_message_text(f"کاربر {name} فعال شد.", reply_markup=back_keyboard())
+                await query.edit_message_text(f"ع©ط§ط±ط¨ط± {name} ظپط¹ط§ظ„ ط´ط¯.", reply_markup=back_keyboard())
                 return
 
             if action == "delete":
@@ -1234,7 +874,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 path = CLIENT_DIR / f"awg0-client-{name}.conf"
                 if path.exists():
                     path.unlink()
-                await query.edit_message_text(f"کاربر {name} حذف شد.", reply_markup=back_keyboard())
+                await query.edit_message_text(f"ع©ط§ط±ط¨ط± {name} ط­ط°ظپ ط´ط¯.", reply_markup=back_keyboard())
                 return
 
             if action == "extend":
@@ -1246,13 +886,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 LAST_INLINE.pop(query.from_user.id, None)
                 await context.bot.send_message(
                     chat_id=query.message.chat_id,
-                    text=f"تمدید کاربر: {name}\n\nچند گیگ اضافه شود؟\n\nمثال:\n10",
+                    text=f"طھظ…ط¯غŒط¯ ع©ط§ط±ط¨ط±: {name}\n\nع†ظ†ط¯ ع¯غŒع¯ ط§ط¶ط§ظپظ‡ ط´ظˆط¯طں\n\nظ…ط«ط§ظ„:\n10",
                     reply_markup=main_keyboard(update.effective_user.id if update.effective_user else None)
                 )
                 return
 
         except Exception as e:
-            await query.edit_message_text(f"خطا:\n{e}", reply_markup=back_keyboard())
+            await query.edit_message_text(f"ط®ط·ط§:\n{e}", reply_markup=back_keyboard())
             return
 
     if data.startswith("manage:"):
@@ -1263,10 +903,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         action = data.split(":", 1)[1]
 
         if action == "list_admins":
-            text = "ادمین‌های فعلی:\n\n"
+            text = "ط§ط¯ظ…غŒظ†â€Œظ‡ط§غŒ ظپط¹ظ„غŒ:\n\n"
             for admin_id in sorted(ADMINS):
                 if admin_id == OWNER_ID:
-                    text += f"{admin_id}  مالک اصلی\n"
+                    text += f"{admin_id}  ظ…ط§ظ„ع© ط§طµظ„غŒ\n"
                 else:
                     text += f"{admin_id}\n"
 
@@ -1284,11 +924,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=(
-                    "افزودن ادمین جدید\n\n"
-                    "ID عددی ادمین جدید را بفرست.\n\n"
-                    "مثال:\n"
+                    "ط§ظپط²ظˆط¯ظ† ط§ط¯ظ…غŒظ† ط¬ط¯غŒط¯\n\n"
+                    "ID ط¹ط¯ط¯غŒ ط§ط¯ظ…غŒظ† ط¬ط¯غŒط¯ ط±ط§ ط¨ظپط±ط³طھ.\n\n"
+                    "ظ…ط«ط§ظ„:\n"
                     "123456789\n\n"
-                    "برای لغو بنویس: لغو"
+                    "ط¨ط±ط§غŒ ظ„ط؛ظˆ ط¨ظ†ظˆغŒط³: ظ„ط؛ظˆ"
                 ),
                 reply_markup=main_keyboard(query.from_user.id),
             )
@@ -1302,17 +942,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             LAST_INLINE.pop(query.from_user.id, None)
 
-            text = "حذف ادمین\n\nادمین‌های قابل حذف:\n\n"
+            text = "ط­ط°ظپ ط§ط¯ظ…غŒظ†\n\nط§ط¯ظ…غŒظ†â€Œظ‡ط§غŒ ظ‚ط§ط¨ظ„ ط­ط°ظپ:\n\n"
             removable = [x for x in sorted(ADMINS) if x != OWNER_ID]
             if removable:
                 text += "\n".join(str(x) for x in removable)
-                text += "\n\nID عددی ادمینی که می‌خواهی حذف شود را بفرست."
+                text += "\n\nID ط¹ط¯ط¯غŒ ط§ط¯ظ…غŒظ†غŒ ع©ظ‡ ظ…غŒâ€Œط®ظˆط§ظ‡غŒ ط­ط°ظپ ط´ظˆط¯ ط±ط§ ط¨ظپط±ط³طھ."
             else:
-                text += "ادمین قابل حذف وجود ندارد."
+                text += "ط§ط¯ظ…غŒظ† ظ‚ط§ط¨ظ„ ط­ط°ظپ ظˆط¬ظˆط¯ ظ†ط¯ط§ط±ط¯."
 
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
-                text=text + "\n\nبرای لغو بنویس: لغو",
+                text=text + "\n\nط¨ط±ط§غŒ ظ„ط؛ظˆ ط¨ظ†ظˆغŒط³: ظ„ط؛ظˆ",
                 reply_markup=main_keyboard(query.from_user.id),
             )
             return
@@ -1328,13 +968,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=(
-                    "تنظیم کانال بکاپ\n\n"
-                    "قبل از ادامه، ربات باید داخل کانال یا گروه بکاپ Admin باشد.\n"
-                    "برای کانال، دسترسی Post Messages هم لازم است.\n\n"
-                    "حالا لینک کانال/گروه بکاپ را بفرست.\n\n"
-                    "مثال:\n"
+                    "طھظ†ط¸غŒظ… ع©ط§ظ†ط§ظ„ ط¨ع©ط§ظ¾\n\n"
+                    "ظ‚ط¨ظ„ ط§ط² ط§ط¯ط§ظ…ظ‡طŒ ط±ط¨ط§طھ ط¨ط§غŒط¯ ط¯ط§ط®ظ„ ع©ط§ظ†ط§ظ„ غŒط§ ع¯ط±ظˆظ‡ ط¨ع©ط§ظ¾ Admin ط¨ط§ط´ط¯.\n"
+                    "ط¨ط±ط§غŒ ع©ط§ظ†ط§ظ„طŒ ط¯ط³طھط±ط³غŒ Post Messages ظ‡ظ… ظ„ط§ط²ظ… ط§ط³طھ.\n\n"
+                    "ط­ط§ظ„ط§ ظ„غŒظ†ع© ع©ط§ظ†ط§ظ„/ع¯ط±ظˆظ‡ ط¨ع©ط§ظ¾ ط±ط§ ط¨ظپط±ط³طھ.\n\n"
+                    "ظ…ط«ط§ظ„:\n"
                     "https://t.me/+xxxxxxxx\n\n"
-                    "برای لغو بنویس: لغو"
+                    "ط¨ط±ط§غŒ ظ„ط؛ظˆ ط¨ظ†ظˆغŒط³: ظ„ط؛ظˆ"
                 ),
                 reply_markup=main_keyboard(query.from_user.id),
             )
@@ -1351,14 +991,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=(
-                    "تنظیم دامنه و SSL\n\n"
-                    "قبل از شروع، باید در پنل DNS دامنه یک A Record بسازی.\n\n"
-                    "مثال:\n"
+                    "طھظ†ط¸غŒظ… ط¯ط§ظ…ظ†ظ‡ ظˆ SSL\n\n"
+                    "ظ‚ط¨ظ„ ط§ط² ط´ط±ظˆط¹طŒ ط¨ط§غŒط¯ ط¯ط± ظ¾ظ†ظ„ DNS ط¯ط§ظ…ظ†ظ‡ غŒع© A Record ط¨ط³ط§ط²غŒ.\n\n"
+                    "ظ…ط«ط§ظ„:\n"
                     "panel.example.com  A  203.0.113.10\n\n"
-                    "حالا دامنه‌ای که می‌خواهی برای پنل استفاده شود را بفرست.\n\n"
-                    "مثال:\n"
+                    "ط­ط§ظ„ط§ ط¯ط§ظ…ظ†ظ‡â€Œط§غŒ ع©ظ‡ ظ…غŒâ€Œط®ظˆط§ظ‡غŒ ط¨ط±ط§غŒ ظ¾ظ†ظ„ ط§ط³طھظپط§ط¯ظ‡ ط´ظˆط¯ ط±ط§ ط¨ظپط±ط³طھ.\n\n"
+                    "ظ…ط«ط§ظ„:\n"
                     "panel.example.com\n\n"
-                    "برای لغو بنویس: لغو"
+                    "ط¨ط±ط§غŒ ظ„ط؛ظˆ ط¨ظ†ظˆغŒط³: ظ„ط؛ظˆ"
                 ),
                 reply_markup=main_keyboard(query.from_user.id),
             )
@@ -1375,21 +1015,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=(
-                    "تنظیم دامنه و SSL\n\n"
-                    "قبل از شروع، باید در پنل DNS دامنه یک A Record بسازی.\n\n"
-                    "مثال:\n"
+                    "طھظ†ط¸غŒظ… ط¯ط§ظ…ظ†ظ‡ ظˆ SSL\n\n"
+                    "ظ‚ط¨ظ„ ط§ط² ط´ط±ظˆط¹طŒ ط¨ط§غŒط¯ ط¯ط± ظ¾ظ†ظ„ DNS ط¯ط§ظ…ظ†ظ‡ غŒع© A Record ط¨ط³ط§ط²غŒ.\n\n"
+                    "ظ…ط«ط§ظ„:\n"
                     "panel.example.com  A  203.0.113.10\n\n"
-                    "حالا دامنه‌ای که می‌خواهی برای پنل استفاده شود را بفرست.\n\n"
-                    "مثال:\n"
+                    "ط­ط§ظ„ط§ ط¯ط§ظ…ظ†ظ‡â€Œط§غŒ ع©ظ‡ ظ…غŒâ€Œط®ظˆط§ظ‡غŒ ط¨ط±ط§غŒ ظ¾ظ†ظ„ ط§ط³طھظپط§ط¯ظ‡ ط´ظˆط¯ ط±ط§ ط¨ظپط±ط³طھ.\n\n"
+                    "ظ…ط«ط§ظ„:\n"
                     "panel.example.com\n\n"
-                    "برای لغو بنویس: لغو"
+                    "ط¨ط±ط§غŒ ظ„ط؛ظˆ ط¨ظ†ظˆغŒط³: ظ„ط؛ظˆ"
                 ),
                 reply_markup=main_keyboard(query.from_user.id),
             )
             return
 
         if action == "backup_now":
-            set_busy("گرفتن بکاپ کامل", query.from_user.id)
+            set_busy("ع¯ط±ظپطھظ† ط¨ع©ط§ظ¾ ع©ط§ظ…ظ„", query.from_user.id)
 
             try:
                 await query.message.delete()
@@ -1401,9 +1041,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=(
-                    "⏳ بکاپ کامل شروع شد.\n\n"
-                    "از کاربران، دیتابیس بات، کانفیگ‌ها، SSL، nginx و firewall بکاپ گرفته می‌شود.\n"
-                    "تا پایان عملیات، دکمه‌ها موقتاً قفل هستند."
+                    "âڈ³ ط¨ع©ط§ظ¾ ع©ط§ظ…ظ„ ط´ط±ظˆط¹ ط´ط¯.\n\n"
+                    "ط§ط² ع©ط§ط±ط¨ط±ط§ظ†طŒ ط¯غŒطھط§ط¨غŒط³ ط¨ط§طھطŒ ع©ط§ظ†ظپغŒع¯â€Œظ‡ط§طŒ SSLطŒ nginx ظˆ firewall ط¨ع©ط§ظ¾ ع¯ط±ظپطھظ‡ ظ…غŒâ€Œط´ظˆط¯.\n"
+                    "طھط§ ظ¾ط§غŒط§ظ† ط¹ظ…ظ„غŒط§طھطŒ ط¯ع©ظ…ظ‡â€Œظ‡ط§ ظ…ظˆظ‚طھط§ظ‹ ظ‚ظپظ„ ظ‡ط³طھظ†ط¯."
                 ),
                 reply_markup=main_keyboard(query.from_user.id),
             )
@@ -1450,10 +1090,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(
                     chat_id=query.message.chat_id,
                     text=(
-                        "✅ بکاپ کامل انجام شد.\n\n"
+                        "âœ… ط¨ع©ط§ظ¾ ع©ط§ظ…ظ„ ط§ظ†ط¬ط§ظ… ط´ط¯.\n\n"
                         f"File: {Path(backup_path).name}\n"
                         f"Size: {size_mb:.2f} MB\n\n"
-                        "این فایل برای ریستور کامل کاربران و تنظیمات استفاده می‌شود."
+                        "ط§غŒظ† ظپط§غŒظ„ ط¨ط±ط§غŒ ط±غŒط³طھظˆط± ع©ط§ظ…ظ„ ع©ط§ط±ط¨ط±ط§ظ† ظˆ طھظ†ط¸غŒظ…ط§طھ ط§ط³طھظپط§ط¯ظ‡ ظ…غŒâ€Œط´ظˆط¯."
                     ),
                     reply_markup=main_keyboard(query.from_user.id),
                 )
@@ -1463,7 +1103,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 clear_busy()
                 await context.bot.send_message(
                     chat_id=query.message.chat_id,
-                    text=f"❌ خطا در بکاپ:\n\n{e}",
+                    text=f"â‌Œ ط®ط·ط§ ط¯ط± ط¨ع©ط§ظ¾:\n\n{e}",
                     reply_markup=main_keyboard(query.from_user.id),
                 )
                 return
@@ -1479,17 +1119,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=(
-                    "تنظیم تعداد بکاپ خودکار\n\n"
-                    "روزی چند بار بکاپ گرفته شود؟\n\n"
-                    "مثال‌ها:\n"
-                    "1 = روزی یک بار\n"
-                    "2 = هر 12 ساعت\n"
-                    "4 = هر 6 ساعت\n"
-                    "6 = هر 4 ساعت\n"
-                    "12 = هر 2 ساعت\n"
-                    "24 = هر 1 ساعت\n\n"
-                    "عدد مجاز: 1 تا 24\n"
-                    "برای لغو بنویس: لغو"
+                    "طھظ†ط¸غŒظ… طھط¹ط¯ط§ط¯ ط¨ع©ط§ظ¾ ط®ظˆط¯ع©ط§ط±\n\n"
+                    "ط±ظˆط²غŒ ع†ظ†ط¯ ط¨ط§ط± ط¨ع©ط§ظ¾ ع¯ط±ظپطھظ‡ ط´ظˆط¯طں\n\n"
+                    "ظ…ط«ط§ظ„â€Œظ‡ط§:\n"
+                    "1 = ط±ظˆط²غŒ غŒع© ط¨ط§ط±\n"
+                    "2 = ظ‡ط± 12 ط³ط§ط¹طھ\n"
+                    "4 = ظ‡ط± 6 ط³ط§ط¹طھ\n"
+                    "6 = ظ‡ط± 4 ط³ط§ط¹طھ\n"
+                    "12 = ظ‡ط± 2 ط³ط§ط¹طھ\n"
+                    "24 = ظ‡ط± 1 ط³ط§ط¹طھ\n\n"
+                    "ط¹ط¯ط¯ ظ…ط¬ط§ط²: 1 طھط§ 24\n"
+                    "ط¨ط±ط§غŒ ظ„ط؛ظˆ ط¨ظ†ظˆغŒط³: ظ„ط؛ظˆ"
                 ),
                 reply_markup=main_keyboard(query.from_user.id),
             )
@@ -1500,24 +1140,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 installed = current_version()
 
                 await query.edit_message_text(
-                    "🔎 در حال بررسی نسخه GitHub..."
+                    "ًں”ژ ط¯ط± ط­ط§ظ„ ط¨ط±ط±ط³غŒ ظ†ط³ط®ظ‡ GitHub..."
                 )
 
                 available = await asyncio.to_thread(latest_version)
 
                 if installed == available:
                     await query.edit_message_text(
-                        "✅ آخرین نسخه را داری.\n\n"
-                        f"نسخه نصب‌شده: {installed}",
+                        "âœ… ط¢ط®ط±غŒظ† ظ†ط³ط®ظ‡ ط±ط§ ط¯ط§ط±غŒ.\n\n"
+                        f"ظ†ط³ط®ظ‡ ظ†طµط¨â€Œط´ط¯ظ‡: {installed}",
                         reply_markup=owner_only_keyboard(),
                     )
                     return
 
                 await query.edit_message_text(
-                    "⬆️ نسخه جدید پیدا شد.\n\n"
-                    f"نسخه نصب‌شده: {installed}\n"
-                    f"نسخه جدید: {available}\n\n"
-                    "در حال بروزرسانی کامل از GitHub هستم؛ لطفاً صبر کنید."
+                    "â¬†ï¸ڈ ظ†ط³ط®ظ‡ ط¬ط¯غŒط¯ ظ¾غŒط¯ط§ ط´ط¯.\n\n"
+                    f"ظ†ط³ط®ظ‡ ظ†طµط¨â€Œط´ط¯ظ‡: {installed}\n"
+                    f"ظ†ط³ط®ظ‡ ط¬ط¯غŒط¯: {available}\n\n"
+                    "ط¯ط± ط­ط§ظ„ ط¨ط±ظˆط²ط±ط³ط§ظ†غŒ ع©ط§ظ…ظ„ ط§ط² GitHub ظ‡ط³طھظ…ط› ظ„ط·ظپط§ظ‹ طµط¨ط± ع©ظ†غŒط¯."
                 )
 
                 await asyncio.to_thread(
@@ -1528,14 +1168,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             except Exception as e:
                 await query.edit_message_text(
-                    f"❌ بررسی یا شروع بروزرسانی ناموفق بود:\n\n{e}",
+                    f"â‌Œ ط¨ط±ط±ط³غŒ غŒط§ ط´ط±ظˆط¹ ط¨ط±ظˆط²ط±ط³ط§ظ†غŒ ظ†ط§ظ…ظˆظپظ‚ ط¨ظˆط¯:\n\n{e}",
                     reply_markup=owner_only_keyboard(),
                 )
                 return
 
         if action == "show_settings":
             text = (
-                "تنظیمات فعلی:\n\n"
+                "طھظ†ط¸غŒظ…ط§طھ ظپط¹ظ„غŒ:\n\n"
                 f"VERSION: {current_version()}\n"
                 f"OWNER_ID: {OWNER_ID}\n"
                 f"ADMINS: {','.join(str(x) for x in sorted(ADMINS))}\n"
@@ -1546,14 +1186,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if action == "back":
-            await query.edit_message_text("بخش مدیریت اختصاصی مالک:", reply_markup=owner_only_keyboard())
+            await query.edit_message_text("ط¨ط®ط´ ظ…ط¯غŒط±غŒطھ ط§ط®طھطµط§طµغŒ ظ…ط§ظ„ع©:", reply_markup=owner_only_keyboard())
             return
 
     if data == "menu:status":
         try:
             text = pretty_server_status()
         except Exception as e:
-            text = f"خطا:\n{e}"
+            text = f"ط®ط·ط§:\n{e}"
 
         await query.edit_message_text(text[:3900], reply_markup=back_keyboard())
         return
@@ -1571,7 +1211,7 @@ async def chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     msg = update.effective_message
 
-    text = "شناسه‌ها:\n\n"
+    text = "ط´ظ†ط§ط³ظ‡â€Œظ‡ط§:\n\n"
     text += f"chat_id: {chat.id}\n"
     text += f"chat_type: {chat.type}\n"
 
@@ -1600,7 +1240,7 @@ async def add_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     name = context.args[0]
     if not re.match(r"^[A-Za-z0-9_-]{1,15}$", name):
-        await update.message.reply_text("Name فقط حروف، عدد، _ و - حداکثر ۱۵ کاراکتر.")
+        await update.message.reply_text("Name ظپظ‚ط· ط­ط±ظˆظپطŒ ط¹ط¯ط¯طŒ _ ظˆ - ط­ط¯ط§ع©ط«ط± غ±غµ ع©ط§ط±ط§ع©طھط±.")
         return
 
     gb = int(context.args[1])
@@ -1611,7 +1251,7 @@ async def add_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     con = db()
     if con.execute("SELECT 1 FROM users WHERE name=?", (name,)).fetchone():
         con.close()
-        await update.message.reply_text("این نام قبلاً وجود دارد.")
+        await update.message.reply_text("ط§غŒظ† ظ†ط§ظ… ظ‚ط¨ظ„ط§ظ‹ ظˆط¬ظˆط¯ ط¯ط§ط±ط¯.")
         return
     con.close()
 
@@ -1659,11 +1299,6 @@ async def main_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     uid = update.effective_user.id
 
-    if LICENSE_REQUIRED:
-        result = await asyncio.to_thread(check_license_remote, uid, False)
-        if not result.get("valid"):
-            await handle_license_text(update, context)
-            return
 
     if is_busy():
         await update.message.reply_text(
@@ -1672,19 +1307,19 @@ async def main_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if text == "➕ ساخت کاربر":
+    if text == "â‍• ط³ط§ط®طھ ع©ط§ط±ط¨ط±":
         await delete_last_inline(context, update.effective_chat.id, uid)
         PENDING_ADD[uid] = {"step": "name"}
         await update.message.reply_text(
-            "اسم کاربر جدید را بفرست.\n\n"
-            "مثال:\n"
+            "ط§ط³ظ… ع©ط§ط±ط¨ط± ط¬ط¯غŒط¯ ط±ط§ ط¨ظپط±ط³طھ.\n\n"
+            "ظ…ط«ط§ظ„:\n"
             "noora\n\n"
-            "فقط حروف انگلیسی، عدد، خط تیره و آندرلاین مجاز است.",
+            "ظپظ‚ط· ط­ط±ظˆظپ ط§ظ†ع¯ظ„غŒط³غŒطŒ ط¹ط¯ط¯طŒ ط®ط· طھغŒط±ظ‡ ظˆ ط¢ظ†ط¯ط±ظ„ط§غŒظ† ظ…ط¬ط§ط² ط§ط³طھ.",
             reply_markup=main_keyboard(update.effective_user.id if update.effective_user else None),
         )
         return
 
-    if text == "📋 لیست کاربران":
+    if text == "ًں“‹ ظ„غŒط³طھ ع©ط§ط±ط¨ط±ط§ظ†":
         await delete_last_inline(context, update.effective_chat.id, uid)
         try:
             update_traffic_and_enforce()
@@ -1693,81 +1328,81 @@ async def main_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             con.close()
 
             if not rows:
-                out = "کاربری وجود ندارد."
+                out = "ع©ط§ط±ط¨ط±غŒ ظˆط¬ظˆط¯ ظ†ط¯ط§ط±ط¯."
             else:
                 msg = []
                 for r in rows:
                     used = r["total_rx"] + r["total_tx"]
                     limit = r["limit_bytes"]
-                    status = "فعال ✅" if r["enabled"] else "غیرفعال ⛔"
+                    status = "ظپط¹ط§ظ„ âœ…" if r["enabled"] else "ط؛غŒط±ظپط¹ط§ظ„ â›”"
                     msg.append(
                         f"{r['name']} | {status}\n"
-                        f"مصرف: {human_bytes(used)} / {human_bytes(limit)}\n"
-                        f"انقضا: {r['expire_at'][:10]}\n"
+                        f"ظ…طµط±ظپ: {human_bytes(used)} / {human_bytes(limit)}\n"
+                        f"ط§ظ†ظ‚ط¶ط§: {r['expire_at'][:10]}\n"
                         f"IP: {r['ipv4']}"
                     )
                 out = "\n\n".join(msg)
         except Exception as e:
-            out = f"خطا:\n{e}"
+            out = f"ط®ط·ط§:\n{e}"
 
         await update.message.reply_text(out[:3900], reply_markup=main_keyboard(update.effective_user.id if update.effective_user else None))
         return
 
-    if text == "📱 QR کاربر":
+    if text == "ًں“± QR ع©ط§ط±ط¨ط±":
         await send_inline(
             update,
             context,
-            "برای دریافت QR، کاربر را انتخاب کن:",
+            "ط¨ط±ط§غŒ ط¯ط±غŒط§ظپطھ QRطŒ ع©ط§ط±ط¨ط± ط±ط§ ط§ظ†طھط®ط§ط¨ ع©ظ†:",
             reply_markup=users_action_keyboard("qr"),
         )
         return
 
-    if text == "📄 فایل کانفیگ":
+    if text == "ًں“„ ظپط§غŒظ„ ع©ط§ظ†ظپغŒع¯":
         await send_inline(
             update,
             context,
-            "برای دریافت فایل کانفیگ، کاربر را انتخاب کن:",
+            "ط¨ط±ط§غŒ ط¯ط±غŒط§ظپطھ ظپط§غŒظ„ ع©ط§ظ†ظپغŒع¯طŒ ع©ط§ط±ط¨ط± ط±ط§ ط§ظ†طھط®ط§ط¨ ع©ظ†:",
             reply_markup=users_action_keyboard("config"),
         )
         return
 
-    if text == "⛔ غیرفعال":
+    if text == "â›” ط؛غŒط±ظپط¹ط§ظ„":
         await send_inline(
             update,
             context,
-            "برای غیرفعال کردن، کاربر را انتخاب کن:",
+            "ط¨ط±ط§غŒ ط؛غŒط±ظپط¹ط§ظ„ ع©ط±ط¯ظ†طŒ ع©ط§ط±ط¨ط± ط±ط§ ط§ظ†طھط®ط§ط¨ ع©ظ†:",
             reply_markup=users_action_keyboard("disable"),
         )
         return
 
-    if text == "✅ فعال‌سازی":
+    if text == "âœ… ظپط¹ط§ظ„â€Œط³ط§ط²غŒ":
         await send_inline(
             update,
             context,
-            "برای فعال‌سازی، کاربر را انتخاب کن:",
+            "ط¨ط±ط§غŒ ظپط¹ط§ظ„â€Œط³ط§ط²غŒطŒ ع©ط§ط±ط¨ط± ط±ط§ ط§ظ†طھط®ط§ط¨ ع©ظ†:",
             reply_markup=users_action_keyboard("enable"),
         )
         return
 
-    if text == "🗑 حذف کاربر":
+    if text == "ًں—‘ ط­ط°ظپ ع©ط§ط±ط¨ط±":
         await send_inline(
             update,
             context,
-            "برای حذف کامل، کاربر را انتخاب کن:",
+            "ط¨ط±ط§غŒ ط­ط°ظپ ع©ط§ظ…ظ„طŒ ع©ط§ط±ط¨ط± ط±ط§ ط§ظ†طھط®ط§ط¨ ع©ظ†:",
             reply_markup=users_action_keyboard("delete"),
         )
         return
 
-    if text == "➕ تمدید حجم/روز":
+    if text == "â‍• طھظ…ط¯غŒط¯ ط­ط¬ظ…/ط±ظˆط²":
         await send_inline(
             update,
             context,
-            "برای تمدید، کاربر را انتخاب کن:",
+            "ط¨ط±ط§غŒ طھظ…ط¯غŒط¯طŒ ع©ط§ط±ط¨ط± ط±ط§ ط§ظ†طھط®ط§ط¨ ع©ظ†:",
             reply_markup=users_action_keyboard("extend"),
         )
         return
 
-    if text == "💬 چت با سازنده":
+    if text == "ًں’¬ ع†طھ ط¨ط§ ط³ط§ط²ظ†ط¯ظ‡":
         await delete_last_inline(
             context,
             update.effective_chat.id,
@@ -1775,43 +1410,43 @@ async def main_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         await update.message.reply_text(
-            "💬 ارتباط با سازنده ربات\n\n"
-            f"آیدی سازنده:\n@{CREATOR_USERNAME}\n\n"
-            "برای شروع گفتگو روی دکمه زیر بزن.",
+            "ًں’¬ ط§ط±طھط¨ط§ط· ط¨ط§ ط³ط§ط²ظ†ط¯ظ‡ ط±ط¨ط§طھ\n\n"
+            f"ط¢غŒط¯غŒ ط³ط§ط²ظ†ط¯ظ‡:\n@{CREATOR_USERNAME}\n\n"
+            "ط¨ط±ط§غŒ ط´ط±ظˆط¹ ع¯ظپطھع¯ظˆ ط±ظˆغŒ ط¯ع©ظ…ظ‡ ط²غŒط± ط¨ط²ظ†.",
             reply_markup=creator_contact_keyboard(),
         )
         return
 
-    if text == "⚙️ مدیریت":
+    if text == "âڑ™ï¸ڈ ظ…ط¯غŒط±غŒطھ":
         if not is_owner(update):
             return
         await send_inline(
             update,
             context,
-            "بخش مدیریت اختصاصی مالک:",
+            "ط¨ط®ط´ ظ…ط¯غŒط±غŒطھ ط§ط®طھطµط§طµغŒ ظ…ط§ظ„ع©:",
             reply_markup=owner_only_keyboard(),
         )
         return
 
-    if text == "📊 وضعیت سرور":
+    if text == "ًں“ٹ ظˆط¶ط¹غŒطھ ط³ط±ظˆط±":
         await delete_last_inline(context, update.effective_chat.id, uid)
         try:
             out = pretty_server_status()
         except Exception as e:
-            out = f"خطا:\n{e}"
+            out = f"ط®ط·ط§:\n{e}"
         await update.message.reply_text(
             out[:3900],
             reply_markup=main_keyboard(update.effective_user.id if update.effective_user else None)
         )
         return
 
-    if text == "🆔 دریافت ID":
+    if text == "ًں†” ط¯ط±غŒط§ظپطھ ID":
         await delete_last_inline(context, update.effective_chat.id, uid)
 
         chat = update.effective_chat
         user = update.effective_user
 
-        out = "شناسه‌ها:\n\n"
+        out = "ط´ظ†ط§ط³ظ‡â€Œظ‡ط§:\n\n"
         out += f"chat_id: {chat.id}\n"
         out += f"chat_type: {chat.type}\n"
 
@@ -1908,16 +1543,16 @@ def configure_backup_frequency(times_per_day):
     try:
         times_per_day = int(times_per_day)
     except Exception:
-        raise RuntimeError("عدد نامعتبر است.")
+        raise RuntimeError("ط¹ط¯ط¯ ظ†ط§ظ…ط¹طھط¨ط± ط§ط³طھ.")
 
     if times_per_day < 1 or times_per_day > 24:
-        raise RuntimeError("عدد باید بین 1 تا 24 باشد.")
+        raise RuntimeError("ط¹ط¯ط¯ ط¨ط§غŒط¯ ط¨غŒظ† 1 طھط§ 24 ط¨ط§ط´ط¯.")
 
     interval_minutes = 1440 // times_per_day
 
     if 1440 % times_per_day != 0:
         raise RuntimeError(
-            "برای تقسیم دقیق روز، یکی از این عددها را انتخاب کن:\n"
+            "ط¨ط±ط§غŒ طھظ‚ط³غŒظ… ط¯ظ‚غŒظ‚ ط±ظˆط²طŒ غŒع©غŒ ط§ط² ط§غŒظ† ط¹ط¯ط¯ظ‡ط§ ط±ط§ ط§ظ†طھط®ط§ط¨ ع©ظ†:\n"
             "1, 2, 3, 4, 6, 8, 12, 24"
         )
 
@@ -2007,19 +1642,19 @@ def setup_domain_ssl(domain, static_ip, email):
 
     if resolved and resolved != static_ip:
         raise RuntimeError(
-            f"DNS دامنه هنوز روی IP سرور نیست.\n\n"
+            f"DNS ط¯ط§ظ…ظ†ظ‡ ظ‡ظ†ظˆط² ط±ظˆغŒ IP ط³ط±ظˆط± ظ†غŒط³طھ.\n\n"
             f"Domain: {domain}\n"
             f"Resolved IP: {resolved}\n"
             f"Server IP: {static_ip}\n\n"
-            f"اول A Record دامنه را روی {static_ip} بگذار، بعد دوباره اجرا کن."
+            f"ط§ظˆظ„ A Record ط¯ط§ظ…ظ†ظ‡ ط±ط§ ط±ظˆغŒ {static_ip} ط¨ع¯ط°ط§ط±طŒ ط¨ط¹ط¯ ط¯ظˆط¨ط§ط±ظ‡ ط§ط¬ط±ط§ ع©ظ†."
         )
 
     if not resolved:
         raise RuntimeError(
-            f"دامنه هنوز Resolve نمی‌شود.\n\n"
-            f"یک A Record بساز:\n"
+            f"ط¯ط§ظ…ظ†ظ‡ ظ‡ظ†ظˆط² Resolve ظ†ظ…غŒâ€Œط´ظˆط¯.\n\n"
+            f"غŒع© A Record ط¨ط³ط§ط²:\n"
             f"{domain}  A  {static_ip}\n\n"
-            f"بعد از چند دقیقه دوباره تست کن."
+            f"ط¨ط¹ط¯ ط§ط² ع†ظ†ط¯ ط¯ظ‚غŒظ‚ظ‡ ط¯ظˆط¨ط§ط±ظ‡ طھط³طھ ع©ظ†."
         )
 
     run(["bash", "-lc", "apt update && apt install -y nginx certbot python3-certbot-nginx"])
@@ -2090,10 +1725,10 @@ async def manage_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     state = PENDING_MANAGE[uid]
     step = state.get("step")
 
-    if text in ["/cancel", "cancel", "لغو"]:
+    if text in ["/cancel", "cancel", "ظ„ط؛ظˆ"]:
         PENDING_MANAGE.pop(uid, None)
         await update.message.reply_text(
-            "عملیات مدیریتی لغو شد.",
+            "ط¹ظ…ظ„غŒط§طھ ظ…ط¯غŒط±غŒطھغŒ ظ„ط؛ظˆ ط´ط¯.",
             reply_markup=main_keyboard(uid),
         )
         return True
@@ -2102,13 +1737,13 @@ async def manage_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         try:
             new_admin = int(text)
         except Exception:
-            await update.message.reply_text("ID نامعتبر است. فقط عدد بفرست.")
+            await update.message.reply_text("ID ظ†ط§ظ…ط¹طھط¨ط± ط§ط³طھ. ظپظ‚ط· ط¹ط¯ط¯ ط¨ظپط±ط³طھ.")
             return True
 
         if new_admin in ADMINS:
             PENDING_MANAGE.pop(uid, None)
             await update.message.reply_text(
-                "این ID از قبل ادمین است.",
+                "ط§غŒظ† ID ط§ط² ظ‚ط¨ظ„ ط§ط¯ظ…غŒظ† ط§ط³طھ.",
                 reply_markup=main_keyboard(uid),
             )
             return True
@@ -2118,7 +1753,7 @@ async def manage_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         PENDING_MANAGE.pop(uid, None)
 
         await update.message.reply_text(
-            f"ادمین اضافه شد:\n{new_admin}",
+            f"ط§ط¯ظ…غŒظ† ط§ط¶ط§ظپظ‡ ط´ط¯:\n{new_admin}",
             reply_markup=main_keyboard(uid),
         )
         return True
@@ -2127,13 +1762,13 @@ async def manage_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         try:
             remove_id = int(text)
         except Exception:
-            await update.message.reply_text("ID نامعتبر است. فقط عدد بفرست.")
+            await update.message.reply_text("ID ظ†ط§ظ…ط¹طھط¨ط± ط§ط³طھ. ظپظ‚ط· ط¹ط¯ط¯ ط¨ظپط±ط³طھ.")
             return True
 
         if remove_id == OWNER_ID:
             PENDING_MANAGE.pop(uid, None)
             await update.message.reply_text(
-                "مالک اصلی قابل حذف نیست.",
+                "ظ…ط§ظ„ع© ط§طµظ„غŒ ظ‚ط§ط¨ظ„ ط­ط°ظپ ظ†غŒط³طھ.",
                 reply_markup=main_keyboard(uid),
             )
             return True
@@ -2141,7 +1776,7 @@ async def manage_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         if remove_id not in ADMINS:
             PENDING_MANAGE.pop(uid, None)
             await update.message.reply_text(
-                "این ID داخل لیست ادمین‌ها نیست.",
+                "ط§غŒظ† ID ط¯ط§ط®ظ„ ظ„غŒط³طھ ط§ط¯ظ…غŒظ†â€Œظ‡ط§ ظ†غŒط³طھ.",
                 reply_markup=main_keyboard(uid),
             )
             return True
@@ -2151,7 +1786,7 @@ async def manage_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         PENDING_MANAGE.pop(uid, None)
 
         await update.message.reply_text(
-            f"ادمین حذف شد:\n{remove_id}",
+            f"ط§ط¯ظ…غŒظ† ط­ط°ظپ ط´ط¯:\n{remove_id}",
             reply_markup=main_keyboard(uid),
         )
         return True
@@ -2163,9 +1798,9 @@ async def manage_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             or text.startswith("t.me/")
         ):
             await update.message.reply_text(
-                "لینک نامعتبر است.\n\n"
-                "لینک باید با t.me یا https://t.me شروع شود.\n\n"
-                "مثال:\n"
+                "ظ„غŒظ†ع© ظ†ط§ظ…ط¹طھط¨ط± ط§ط³طھ.\n\n"
+                "ظ„غŒظ†ع© ط¨ط§غŒط¯ ط¨ط§ t.me غŒط§ https://t.me ط´ط±ظˆط¹ ط´ظˆط¯.\n\n"
+                "ظ…ط«ط§ظ„:\n"
                 "https://t.me/+xxxxxxxx"
             )
             return True
@@ -2174,11 +1809,11 @@ async def manage_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         state["step"] = "backup_id"
 
         await update.message.reply_text(
-            "لینک ذخیره شد.\n\n"
-            "حالا ID عددی کانال/گروه بکاپ را بفرست.\n\n"
-            "نکته مهم:\n"
-            "ربات باید داخل همان کانال/گروه Admin باشد.\n\n"
-            "مثال:\n"
+            "ظ„غŒظ†ع© ط°ط®غŒط±ظ‡ ط´ط¯.\n\n"
+            "ط­ط§ظ„ط§ ID ط¹ط¯ط¯غŒ ع©ط§ظ†ط§ظ„/ع¯ط±ظˆظ‡ ط¨ع©ط§ظ¾ ط±ط§ ط¨ظپط±ط³طھ.\n\n"
+            "ظ†ع©طھظ‡ ظ…ظ‡ظ…:\n"
+            "ط±ط¨ط§طھ ط¨ط§غŒط¯ ط¯ط§ط®ظ„ ظ‡ظ…ط§ظ† ع©ط§ظ†ط§ظ„/ع¯ط±ظˆظ‡ Admin ط¨ط§ط´ط¯.\n\n"
+            "ظ…ط«ط§ظ„:\n"
             "-1001234567890"
         )
         return True
@@ -2188,8 +1823,8 @@ async def manage_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             backup_id = int(text)
         except Exception:
             await update.message.reply_text(
-                "ID کانال/گروه نامعتبر است. باید عدد باشد.\n\n"
-                "مثال:\n"
+                "ID ع©ط§ظ†ط§ظ„/ع¯ط±ظˆظ‡ ظ†ط§ظ…ط¹طھط¨ط± ط§ط³طھ. ط¨ط§غŒط¯ ط¹ط¯ط¯ ط¨ط§ط´ط¯.\n\n"
+                "ظ…ط«ط§ظ„:\n"
                 "-1001234567890"
             )
             return True
@@ -2203,10 +1838,10 @@ async def manage_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         PENDING_MANAGE.pop(uid, None)
 
         await update.message.reply_text(
-            "کانال بکاپ تنظیم شد.\n\n"
+            "ع©ط§ظ†ط§ظ„ ط¨ع©ط§ظ¾ طھظ†ط¸غŒظ… ط´ط¯.\n\n"
             f"Link: {BACKUP_LINK}\n"
             f"Chat ID: {BACKUP_CHAT_ID}\n\n"
-            "از این به بعد کانفیگ کاربران جدید برای کانال بکاپ هم ارسال می‌شود.",
+            "ط§ط² ط§غŒظ† ط¨ظ‡ ط¨ط¹ط¯ ع©ط§ظ†ظپغŒع¯ ع©ط§ط±ط¨ط±ط§ظ† ط¬ط¯غŒط¯ ط¨ط±ط§غŒ ع©ط§ظ†ط§ظ„ ط¨ع©ط§ظ¾ ظ‡ظ… ط§ط±ط³ط§ظ„ ظ…غŒâ€Œط´ظˆط¯.",
             reply_markup=main_keyboard(uid),
         )
         return True
@@ -2216,8 +1851,8 @@ async def manage_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         if not is_valid_domain(domain):
             await update.message.reply_text(
-                "دامنه نامعتبر است.\n\n"
-                "مثال درست:\n"
+                "ط¯ط§ظ…ظ†ظ‡ ظ†ط§ظ…ط¹طھط¨ط± ط§ط³طھ.\n\n"
+                "ظ…ط«ط§ظ„ ط¯ط±ط³طھ:\n"
                 "panel.example.com"
             )
             return True
@@ -2226,9 +1861,9 @@ async def manage_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         state["step"] = "domain_ip"
 
         await update.message.reply_text(
-            f"دامنه ثبت شد:\n{domain}\n\n"
-            "حالا IP استاتیک سرور را بفرست.\n\n"
-            "برای این سرور معمولاً این است:\n"
+            f"ط¯ط§ظ…ظ†ظ‡ ط«ط¨طھ ط´ط¯:\n{domain}\n\n"
+            "ط­ط§ظ„ط§ IP ط§ط³طھط§طھغŒع© ط³ط±ظˆط± ط±ط§ ط¨ظپط±ط³طھ.\n\n"
+            "ط¨ط±ط§غŒ ط§غŒظ† ط³ط±ظˆط± ظ…ط¹ظ…ظˆظ„ط§ظ‹ ط§غŒظ† ط§ط³طھ:\n"
             "203.0.113.10"
         )
         return True
@@ -2238,8 +1873,8 @@ async def manage_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         if not is_valid_ipv4(static_ip):
             await update.message.reply_text(
-                "IP نامعتبر است.\n\n"
-                "مثال:\n"
+                "IP ظ†ط§ظ…ط¹طھط¨ط± ط§ط³طھ.\n\n"
+                "ظ…ط«ط§ظ„:\n"
                 "203.0.113.10"
             )
             return True
@@ -2249,20 +1884,20 @@ async def manage_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         if not resolved:
             await update.message.reply_text(
-                "دامنه هنوز Resolve نمی‌شود.\n\n"
-                f"در DNS دامنه این رکورد را بساز:\n"
+                "ط¯ط§ظ…ظ†ظ‡ ظ‡ظ†ظˆط² Resolve ظ†ظ…غŒâ€Œط´ظˆط¯.\n\n"
+                f"ط¯ط± DNS ط¯ط§ظ…ظ†ظ‡ ط§غŒظ† ط±ع©ظˆط±ط¯ ط±ط§ ط¨ط³ط§ط²:\n"
                 f"{domain}  A  {static_ip}\n\n"
-                "بعد از چند دقیقه دوباره همین IP را بفرست."
+                "ط¨ط¹ط¯ ط§ط² ع†ظ†ط¯ ط¯ظ‚غŒظ‚ظ‡ ط¯ظˆط¨ط§ط±ظ‡ ظ‡ظ…غŒظ† IP ط±ط§ ط¨ظپط±ط³طھ."
             )
             return True
 
         if resolved != static_ip:
             await update.message.reply_text(
-                "DNS دامنه هنوز روی IP درست نیست.\n\n"
-                f"دامنه: {domain}\n"
-                f"IP فعلی دامنه: {resolved}\n"
-                f"IP سرور: {static_ip}\n\n"
-                f"A Record دامنه را روی {static_ip} تنظیم کن، بعد دوباره IP را بفرست."
+                "DNS ط¯ط§ظ…ظ†ظ‡ ظ‡ظ†ظˆط² ط±ظˆغŒ IP ط¯ط±ط³طھ ظ†غŒط³طھ.\n\n"
+                f"ط¯ط§ظ…ظ†ظ‡: {domain}\n"
+                f"IP ظپط¹ظ„غŒ ط¯ط§ظ…ظ†ظ‡: {resolved}\n"
+                f"IP ط³ط±ظˆط±: {static_ip}\n\n"
+                f"A Record ط¯ط§ظ…ظ†ظ‡ ط±ط§ ط±ظˆغŒ {static_ip} طھظ†ط¸غŒظ… ع©ظ†طŒ ط¨ط¹ط¯ ط¯ظˆط¨ط§ط±ظ‡ IP ط±ط§ ط¨ظپط±ط³طھ."
             )
             return True
 
@@ -2270,9 +1905,9 @@ async def manage_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         state["step"] = "domain_email"
 
         await update.message.reply_text(
-            "DNS درست است.\n\n"
-            "حالا ایمیل برای صدور SSL را بفرست.\n\n"
-            "مثال:\n"
+            "DNS ط¯ط±ط³طھ ط§ط³طھ.\n\n"
+            "ط­ط§ظ„ط§ ط§غŒظ…غŒظ„ ط¨ط±ط§غŒ طµط¯ظˆط± SSL ط±ط§ ط¨ظپط±ط³طھ.\n\n"
+            "ظ…ط«ط§ظ„:\n"
             "admin@example.com"
         )
         return True
@@ -2282,8 +1917,8 @@ async def manage_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
             await update.message.reply_text(
-                "ایمیل نامعتبر است.\n\n"
-                "مثال:\n"
+                "ط§غŒظ…غŒظ„ ظ†ط§ظ…ط¹طھط¨ط± ط§ط³طھ.\n\n"
+                "ظ…ط«ط§ظ„:\n"
                 "admin@example.com"
             )
             return True
@@ -2291,16 +1926,16 @@ async def manage_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         domain = state["domain"]
         static_ip = state["static_ip"]
 
-        set_busy("تنظیم دامنه و SSL", uid)
+        set_busy("طھظ†ط¸غŒظ… ط¯ط§ظ…ظ†ظ‡ ظˆ SSL", uid)
 
         await update.message.reply_text(
-            "⏳ عملیات شروع شد.\n\n"
-            "در حال نصب و تنظیم دامنه و SSL...\n\n"
+            "âڈ³ ط¹ظ…ظ„غŒط§طھ ط´ط±ظˆط¹ ط´ط¯.\n\n"
+            "ط¯ط± ط­ط§ظ„ ظ†طµط¨ ظˆ طھظ†ط¸غŒظ… ط¯ط§ظ…ظ†ظ‡ ظˆ SSL...\n\n"
             f"Domain: {domain}\n"
             f"IP: {static_ip}\n"
             f"Email: {email}\n\n"
-            "تا پایان عملیات، دکمه‌های بات موقتاً قفل هستند.\n"
-            "ممکن است ۱ تا ۳ دقیقه طول بکشد."
+            "طھط§ ظ¾ط§غŒط§ظ† ط¹ظ…ظ„غŒط§طھطŒ ط¯ع©ظ…ظ‡â€Œظ‡ط§غŒ ط¨ط§طھ ظ…ظˆظ‚طھط§ظ‹ ظ‚ظپظ„ ظ‡ط³طھظ†ط¯.\n"
+            "ظ…ظ…ع©ظ† ط§ط³طھ غ± طھط§ غ³ ط¯ظ‚غŒظ‚ظ‡ ط·ظˆظ„ ط¨ع©ط´ط¯."
         )
 
         try:
@@ -2314,9 +1949,9 @@ async def manage_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             clear_busy()
 
             await update.message.reply_text(
-                "✅ دامنه و SSL با موفقیت تنظیم شد.\n\n"
-                f"آدرس پنل:\n{url}\n\n"
-                "نتیجه تست‌ها:\n"
+                "âœ… ط¯ط§ظ…ظ†ظ‡ ظˆ SSL ط¨ط§ ظ…ظˆظپظ‚غŒطھ طھظ†ط¸غŒظ… ط´ط¯.\n\n"
+                f"ط¢ط¯ط±ط³ ظ¾ظ†ظ„:\n{url}\n\n"
+                "ظ†طھغŒط¬ظ‡ طھط³طھâ€Œظ‡ط§:\n"
                 f"{checks}",
                 reply_markup=main_keyboard(uid),
             )
@@ -2327,15 +1962,15 @@ async def manage_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             try:
                 checks = await asyncio.to_thread(test_https_domain, domain)
             except Exception as ee:
-                checks = f"تست نهایی هم خطا داد:\n{ee}"
+                checks = f"طھط³طھ ظ†ظ‡ط§غŒغŒ ظ‡ظ… ط®ط·ط§ ط¯ط§ط¯:\n{ee}"
 
             PENDING_MANAGE.pop(uid, None)
             clear_busy()
 
             await update.message.reply_text(
-                "❌ خطا در تنظیم دامنه/SSL\n\n"
-                f"خطا:\n{e}\n\n"
-                "وضعیت تست‌ها:\n"
+                "â‌Œ ط®ط·ط§ ط¯ط± طھظ†ط¸غŒظ… ط¯ط§ظ…ظ†ظ‡/SSL\n\n"
+                f"ط®ط·ط§:\n{e}\n\n"
+                "ظˆط¶ط¹غŒطھ طھط³طھâ€Œظ‡ط§:\n"
                 f"{checks}",
                 reply_markup=main_keyboard(uid),
             )
@@ -2349,15 +1984,15 @@ async def manage_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             count = int(count_text)
         except Exception:
             await update.message.reply_text(
-                "عدد نامعتبر است.\n\n"
-                "مثال:\n"
+                "ط¹ط¯ط¯ ظ†ط§ظ…ط¹طھط¨ط± ط§ط³طھ.\n\n"
+                "ظ…ط«ط§ظ„:\n"
                 "4"
             )
             return True
 
         await update.message.reply_text(
-            "در حال تنظیم بکاپ خودکار...\n\n"
-            f"تعداد بکاپ در روز: {count}"
+            "ط¯ط± ط­ط§ظ„ طھظ†ط¸غŒظ… ط¨ع©ط§ظ¾ ط®ظˆط¯ع©ط§ط±...\n\n"
+            f"طھط¹ط¯ط§ط¯ ط¨ع©ط§ظ¾ ط¯ط± ط±ظˆط²: {count}"
         )
 
         try:
@@ -2365,9 +2000,9 @@ async def manage_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             PENDING_MANAGE.pop(uid, None)
 
             await update.message.reply_text(
-                "✅ بکاپ خودکار تنظیم شد.\n\n"
-                f"تعداد بکاپ در روز: {count}\n"
-                f"ساعت‌های اجرا:\n{', '.join(times)}\n\n"
+                "âœ… ط¨ع©ط§ظ¾ ط®ظˆط¯ع©ط§ط± طھظ†ط¸غŒظ… ط´ط¯.\n\n"
+                f"طھط¹ط¯ط§ط¯ ط¨ع©ط§ظ¾ ط¯ط± ط±ظˆط²: {count}\n"
+                f"ط³ط§ط¹طھâ€Œظ‡ط§غŒ ط§ط¬ط±ط§:\n{', '.join(times)}\n\n"
                 f"{status[:1500]}",
                 reply_markup=main_keyboard(uid),
             )
@@ -2376,7 +2011,7 @@ async def manage_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         except Exception as e:
             PENDING_MANAGE.pop(uid, None)
             await update.message.reply_text(
-                f"❌ خطا در تنظیم بکاپ خودکار:\n\n{e}",
+                f"â‌Œ ط®ط·ط§ ط¯ط± طھظ†ط¸غŒظ… ط¨ع©ط§ظ¾ ط®ظˆط¯ع©ط§ط±:\n\n{e}",
                 reply_markup=main_keyboard(uid),
             )
             return True
@@ -2396,9 +2031,9 @@ async def extend_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     text = (update.message.text or "").strip()
     state = PENDING_EXTEND[uid]
 
-    if text in ["/cancel", "cancel", "لغو"]:
+    if text in ["/cancel", "cancel", "ظ„ط؛ظˆ"]:
         PENDING_EXTEND.pop(uid, None)
-        await update.message.reply_text("عملیات تمدید لغو شد.", reply_markup=main_keyboard(update.effective_user.id if update.effective_user else None))
+        await update.message.reply_text("ط¹ظ…ظ„غŒط§طھ طھظ…ط¯غŒط¯ ظ„ط؛ظˆ ط´ط¯.", reply_markup=main_keyboard(update.effective_user.id if update.effective_user else None))
         return True
 
     name = state["name"]
@@ -2409,15 +2044,15 @@ async def extend_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             if gb < 0 or gb > 10000:
                 raise ValueError()
         except Exception:
-            await update.message.reply_text("حجم نامعتبر است. فقط عدد بفرست. مثال: 10")
+            await update.message.reply_text("ط­ط¬ظ… ظ†ط§ظ…ط¹طھط¨ط± ط§ط³طھ. ظپظ‚ط· ط¹ط¯ط¯ ط¨ظپط±ط³طھ. ظ…ط«ط§ظ„: 10")
             return True
 
         state["gb"] = gb
         state["step"] = "days"
         await update.message.reply_text(
-            f"حجم اضافه: {gb}GB\n\n"
-            "چند روز اضافه شود؟\n\n"
-            "مثال:\n"
+            f"ط­ط¬ظ… ط§ط¶ط§ظپظ‡: {gb}GB\n\n"
+            "ع†ظ†ط¯ ط±ظˆط² ط§ط¶ط§ظپظ‡ ط´ظˆط¯طں\n\n"
+            "ظ…ط«ط§ظ„:\n"
             "15"
         )
         return True
@@ -2428,7 +2063,7 @@ async def extend_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             if days < 0 or days > 3650:
                 raise ValueError()
         except Exception:
-            await update.message.reply_text("تعداد روز نامعتبر است. فقط عدد بفرست. مثال: 15")
+            await update.message.reply_text("طھط¹ط¯ط§ط¯ ط±ظˆط² ظ†ط§ظ…ط¹طھط¨ط± ط§ط³طھ. ظپظ‚ط· ط¹ط¯ط¯ ط¨ظپط±ط³طھ. ظ…ط«ط§ظ„: 15")
             return True
 
         gb = state["gb"]
@@ -2439,7 +2074,7 @@ async def extend_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         if not row:
             con.close()
             PENDING_EXTEND.pop(uid, None)
-            await update.message.reply_text("کاربر پیدا نشد.", reply_markup=main_keyboard(update.effective_user.id if update.effective_user else None))
+            await update.message.reply_text("ع©ط§ط±ط¨ط± ظ¾غŒط¯ط§ ظ†ط´ط¯.", reply_markup=main_keyboard(update.effective_user.id if update.effective_user else None))
             return True
 
         new_limit = row["limit_bytes"] + gb * 1024 * 1024 * 1024
@@ -2467,7 +2102,7 @@ async def extend_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         PENDING_EXTEND.pop(uid, None)
 
         await update.message.reply_text(
-            f"تمدید انجام شد.\n\n"
+            f"طھظ…ط¯غŒط¯ ط§ظ†ط¬ط§ظ… ط´ط¯.\n\n"
             f"User: {name}\n"
             f"Added GB: {gb}\n"
             f"Added days: {days}\n"
@@ -2483,21 +2118,21 @@ async def extend_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 def install_links_text():
     return (
-        "📲 لینک نصب برنامه AmneziaWG\n\n"
-        "برای اتصال، اول برنامه را نصب کن، بعد فایل کانفیگ یا QR را داخل برنامه Import کن.\n\n"
-        "🍏 iPhone / iPad:\n"
+        "ًں“² ظ„غŒظ†ع© ظ†طµط¨ ط¨ط±ظ†ط§ظ…ظ‡ AmneziaWG\n\n"
+        "ط¨ط±ط§غŒ ط§طھطµط§ظ„طŒ ط§ظˆظ„ ط¨ط±ظ†ط§ظ…ظ‡ ط±ط§ ظ†طµط¨ ع©ظ†طŒ ط¨ط¹ط¯ ظپط§غŒظ„ ع©ط§ظ†ظپغŒع¯ غŒط§ QR ط±ط§ ط¯ط§ط®ظ„ ط¨ط±ظ†ط§ظ…ظ‡ Import ع©ظ†.\n\n"
+        "ًںچڈ iPhone / iPad:\n"
         "https://apps.apple.com/us/app/amneziawg/id6478942365\n\n"
-        "🤖 Android - Google Play:\n"
+        "ًں¤– Android - Google Play:\n"
         "https://play.google.com/store/apps/details?id=org.amnezia.vpn\n\n"
-        "🤖 Android - APK / همه دانلودها:\n"
+        "ًں¤– Android - APK / ظ‡ظ…ظ‡ ط¯ط§ظ†ظ„ظˆط¯ظ‡ط§:\n"
         "https://amnezia.org/downloads\n\n"
-        "🪟 Windows:\n"
+        "ًںھں Windows:\n"
         "https://amnezia.org/downloads\n\n"
-        "راهنمای سریع:\n"
-        "1. برنامه را نصب کن.\n"
-        "2. گزینه Import / Add tunnel را بزن.\n"
-        "3. QR را اسکن کن یا فایل conf را وارد کن.\n"
-        "4. اتصال را روشن کن."
+        "ط±ط§ظ‡ظ†ظ…ط§غŒ ط³ط±غŒط¹:\n"
+        "1. ط¨ط±ظ†ط§ظ…ظ‡ ط±ط§ ظ†طµط¨ ع©ظ†.\n"
+        "2. ع¯ط²غŒظ†ظ‡ Import / Add tunnel ط±ط§ ط¨ط²ظ†.\n"
+        "3. QR ط±ط§ ط§ط³ع©ظ† ع©ظ† غŒط§ ظپط§غŒظ„ conf ط±ط§ ظˆط§ط±ط¯ ع©ظ†.\n"
+        "4. ط§طھطµط§ظ„ ط±ط§ ط±ظˆط´ظ† ع©ظ†."
     )
 
 
@@ -2516,11 +2151,6 @@ async def add_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     uid = update.effective_user.id
 
-    if LICENSE_REQUIRED:
-        result = await asyncio.to_thread(check_license_remote, uid, False)
-        if not result.get("valid"):
-            await handle_license_text(update, context)
-            return
 
     if uid in PENDING_MANAGE:
         handled = await manage_flow_handler(update, context)
@@ -2539,9 +2169,9 @@ async def add_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     state = PENDING_ADD[uid]
 
-    if text in ["/cancel", "cancel", "لغو"]:
+    if text in ["/cancel", "cancel", "ظ„ط؛ظˆ"]:
         PENDING_ADD.pop(uid, None)
-        await update.message.reply_text("عملیات ساخت کاربر لغو شد.", reply_markup=main_keyboard(update.effective_user.id if update.effective_user else None))
+        await update.message.reply_text("ط¹ظ…ظ„غŒط§طھ ط³ط§ط®طھ ع©ط§ط±ط¨ط± ظ„ط؛ظˆ ط´ط¯.", reply_markup=main_keyboard(update.effective_user.id if update.effective_user else None))
         return
 
     if state["step"] == "name":
@@ -2549,8 +2179,8 @@ async def add_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if not re.match(r"^[A-Za-z0-9_-]{1,15}$", name):
             await update.message.reply_text(
-                "اسم نامعتبر است. فقط حروف انگلیسی، عدد، _ و - حداکثر ۱۵ کاراکتر.\n\n"
-                "دوباره اسم را بفرست:"
+                "ط§ط³ظ… ظ†ط§ظ…ط¹طھط¨ط± ط§ط³طھ. ظپظ‚ط· ط­ط±ظˆظپ ط§ظ†ع¯ظ„غŒط³غŒطŒ ط¹ط¯ط¯طŒ _ ظˆ - ط­ط¯ط§ع©ط«ط± غ±غµ ع©ط§ط±ط§ع©طھط±.\n\n"
+                "ط¯ظˆط¨ط§ط±ظ‡ ط§ط³ظ… ط±ط§ ط¨ظپط±ط³طھ:"
             )
             return
 
@@ -2559,15 +2189,15 @@ async def add_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         con.close()
 
         if exists:
-            await update.message.reply_text("این اسم قبلاً وجود دارد. یک اسم دیگر بفرست:")
+            await update.message.reply_text("ط§غŒظ† ط§ط³ظ… ظ‚ط¨ظ„ط§ظ‹ ظˆط¬ظˆط¯ ط¯ط§ط±ط¯. غŒع© ط§ط³ظ… ط¯غŒع¯ط± ط¨ظپط±ط³طھ:")
             return
 
         state["name"] = name
         state["step"] = "gb"
         await update.message.reply_text(
-            f"اسم کاربر: {name}\n\n"
-            "حجم چند گیگ باشد؟\n\n"
-            "مثال:\n"
+            f"ط§ط³ظ… ع©ط§ط±ط¨ط±: {name}\n\n"
+            "ط­ط¬ظ… ع†ظ†ط¯ ع¯غŒع¯ ط¨ط§ط´ط¯طں\n\n"
+            "ظ…ط«ط§ظ„:\n"
             "20"
         )
         return
@@ -2578,15 +2208,15 @@ async def add_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if gb <= 0 or gb > 10000:
                 raise ValueError()
         except Exception:
-            await update.message.reply_text("حجم نامعتبر است. فقط عدد بفرست. مثال: 20")
+            await update.message.reply_text("ط­ط¬ظ… ظ†ط§ظ…ط¹طھط¨ط± ط§ط³طھ. ظپظ‚ط· ط¹ط¯ط¯ ط¨ظپط±ط³طھ. ظ…ط«ط§ظ„: 20")
             return
 
         state["gb"] = gb
         state["step"] = "days"
         await update.message.reply_text(
-            f"حجم: {gb}GB\n\n"
-            "اعتبار چند روز باشد؟\n\n"
-            "مثال:\n"
+            f"ط­ط¬ظ…: {gb}GB\n\n"
+            "ط§ط¹طھط¨ط§ط± ع†ظ†ط¯ ط±ظˆط² ط¨ط§ط´ط¯طں\n\n"
+            "ظ…ط«ط§ظ„:\n"
             "30"
         )
         return
@@ -2597,7 +2227,7 @@ async def add_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if days <= 0 or days > 3650:
                 raise ValueError()
         except Exception:
-            await update.message.reply_text("تعداد روز نامعتبر است. فقط عدد بفرست. مثال: 30")
+            await update.message.reply_text("طھط¹ط¯ط§ط¯ ط±ظˆط² ظ†ط§ظ…ط¹طھط¨ط± ط§ط³طھ. ظپظ‚ط· ط¹ط¯ط¯ ط¨ظپط±ط³طھ. ظ…ط«ط§ظ„: 30")
             return
 
         name = state["name"]
@@ -2606,7 +2236,7 @@ async def add_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         expire_at = datetime.now(timezone.utc) + timedelta(days=days)
 
         await update.message.reply_text(
-            f"در حال ساخت کاربر...\n\n"
+            f"ط¯ط± ط­ط§ظ„ ط³ط§ط®طھ ع©ط§ط±ط¨ط±...\n\n"
             f"Name: {name}\n"
             f"Limit: {gb}GB\n"
             f"Days: {days}"
@@ -2647,7 +2277,7 @@ async def add_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             PENDING_ADD.pop(uid, None)
 
             await update.message.reply_text(
-                f"کاربر ساخته شد.\n\n"
+                f"ع©ط§ط±ط¨ط± ط³ط§ط®طھظ‡ ط´ط¯.\n\n"
                 f"Name: {name}\n"
                 f"IP: {ipv4}\n"
                 f"Limit: {gb}GB\n"
@@ -2682,7 +2312,7 @@ async def add_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             PENDING_ADD.pop(uid, None)
             await update.message.reply_text(
-                f"خطا در ساخت کاربر:\n{e}",
+                f"ط®ط·ط§ ط¯ط± ط³ط§ط®طھ ع©ط§ط±ط¨ط±:\n{e}",
                 reply_markup=main_keyboard(update.effective_user.id if update.effective_user else None),
             )
         return
@@ -2826,48 +2456,48 @@ def pretty_duration_from_ts(ts):
     try:
         ts = int(ts)
     except Exception:
-        return "ندارد"
+        return "ظ†ط¯ط§ط±ط¯"
 
     if ts <= 0:
-        return "ندارد"
+        return "ظ†ط¯ط§ط±ط¯"
 
     now = int(datetime.now(timezone.utc).timestamp())
     diff = max(now - ts, 0)
 
     if diff < 60:
-        return "همین الان"
+        return "ظ‡ظ…غŒظ† ط§ظ„ط§ظ†"
 
     minutes = diff // 60
     if minutes < 60:
-        return f"{minutes} دقیقه پیش"
+        return f"{minutes} ط¯ظ‚غŒظ‚ظ‡ ظ¾غŒط´"
 
     hours = minutes // 60
     if hours < 24:
-        return f"{hours} ساعت پیش"
+        return f"{hours} ط³ط§ط¹طھ ظ¾غŒط´"
 
     days = hours // 24
-    return f"{days} روز پیش"
+    return f"{days} ط±ظˆط² ظ¾غŒط´"
 
 
 def status_from_handshake(ts):
     try:
         ts = int(ts)
     except Exception:
-        return "🔴 بدون اتصال"
+        return "ًں”´ ط¨ط¯ظˆظ† ط§طھطµط§ظ„"
 
     if ts <= 0:
-        return "🔴 هنوز وصل نشده"
+        return "ًں”´ ظ‡ظ†ظˆط² ظˆطµظ„ ظ†ط´ط¯ظ‡"
 
     now = int(datetime.now(timezone.utc).timestamp())
     diff = max(now - ts, 0)
 
     if diff <= 180:
-        return "🟢 آنلاین"
+        return "ًںں¢ ط¢ظ†ظ„ط§غŒظ†"
 
     if diff <= 3600:
-        return "🟡 اخیراً وصل بوده"
+        return "ًںں، ط§ط®غŒط±ط§ظ‹ ظˆطµظ„ ط¨ظˆط¯ظ‡"
 
-    return "⚫ آفلاین"
+    return "âڑ« ط¢ظپظ„ط§غŒظ†"
 
 
 def clean_ip(allowed_ips):
@@ -2882,7 +2512,7 @@ def pretty_server_status():
 
     dump = awg("show", AWG_IFACE, "dump").splitlines()
     if not dump:
-        return "اطلاعاتی از سرور دریافت نشد."
+        return "ط§ط·ظ„ط§ط¹ط§طھغŒ ط§ط² ط³ط±ظˆط± ط¯ط±غŒط§ظپطھ ظ†ط´ط¯."
 
     server_line = dump[0].split("\t")
     server_key = server_line[0] if len(server_line) > 0 else ""
@@ -2919,9 +2549,9 @@ def pretty_server_status():
         status = status_from_handshake(latest)
         last_seen = pretty_duration_from_ts(latest)
 
-        if status.startswith("🟢"):
+        if status.startswith("ًںں¢"):
             online_count += 1
-        elif status.startswith("🟡"):
+        elif status.startswith("ًںں،"):
             recent_count += 1
         else:
             offline_count += 1
@@ -2940,43 +2570,43 @@ def pretty_server_status():
             "endpoint": endpoint if endpoint and endpoint != "(none)" else "-",
         })
 
-    text = "📊 وضعیت سرور AmneziaWG\n\n"
-    text += f"🧩 Interface: {AWG_IFACE}\n"
-    text += f"🔌 Port: {port}\n"
+    text = "ًں“ٹ ظˆط¶ط¹غŒطھ ط³ط±ظˆط± AmneziaWG\n\n"
+    text += f"ًں§© Interface: {AWG_IFACE}\n"
+    text += f"ًں”Œ Port: {port}\n"
     if server_key:
-        text += f"🔑 Server Key: {server_key[:12]}...\n"
+        text += f"ًں”‘ Server Key: {server_key[:12]}...\n"
 
     text += "\n"
-    text += f"👥 تعداد کاربران: {len(peers)}\n"
-    text += f"🟢 آنلاین: {online_count}\n"
-    text += f"🟡 اخیراً وصل بوده: {recent_count}\n"
-    text += f"🔴 آفلاین/بدون اتصال: {offline_count}\n"
-    text += f"📦 مصرف کل: {human_bytes(total_used)}\n"
+    text += f"ًں‘¥ طھط¹ط¯ط§ط¯ ع©ط§ط±ط¨ط±ط§ظ†: {len(peers)}\n"
+    text += f"ًںں¢ ط¢ظ†ظ„ط§غŒظ†: {online_count}\n"
+    text += f"ًںں، ط§ط®غŒط±ط§ظ‹ ظˆطµظ„ ط¨ظˆط¯ظ‡: {recent_count}\n"
+    text += f"ًں”´ ط¢ظپظ„ط§غŒظ†/ط¨ط¯ظˆظ† ط§طھطµط§ظ„: {offline_count}\n"
+    text += f"ًں“¦ ظ…طµط±ظپ ع©ظ„: {human_bytes(total_used)}\n"
 
     if not peers:
-        text += "\nکاربری وجود ندارد."
+        text += "\nع©ط§ط±ط¨ط±غŒ ظˆط¬ظˆط¯ ظ†ط¯ط§ط±ط¯."
         return text
 
-    text += "\n━━━━━━━━━━━━━━\n"
+    text += "\nâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پ\n"
 
     for peer in peers:
-        text += f"\n👤 {peer['name']}\n"
-        text += f"وضعیت: {peer['status']}\n"
-        text += f"آخرین اتصال: {peer['last_seen']}\n"
-        text += f"مصرف کل: {human_bytes(peer['used'])}\n"
-        text += f"دریافت/ارسال: {human_bytes(peer['rx'])} / {human_bytes(peer['tx'])}\n"
+        text += f"\nًں‘¤ {peer['name']}\n"
+        text += f"ظˆط¶ط¹غŒطھ: {peer['status']}\n"
+        text += f"ط¢ط®ط±غŒظ† ط§طھطµط§ظ„: {peer['last_seen']}\n"
+        text += f"ظ…طµط±ظپ ع©ظ„: {human_bytes(peer['used'])}\n"
+        text += f"ط¯ط±غŒط§ظپطھ/ط§ط±ط³ط§ظ„: {human_bytes(peer['rx'])} / {human_bytes(peer['tx'])}\n"
 
         if peer["limit"]:
-            text += f"حجم مجاز: {human_bytes(peer['limit'])}\n"
-            text += f"باقی‌مانده: {human_bytes(peer['remaining'])}\n"
+            text += f"ط­ط¬ظ… ظ…ط¬ط§ط²: {human_bytes(peer['limit'])}\n"
+            text += f"ط¨ط§ظ‚غŒâ€Œظ…ط§ظ†ط¯ظ‡: {human_bytes(peer['remaining'])}\n"
 
-        text += f"انقضا: {peer['expire']}\n"
-        text += f"IP داخلی: {peer['ip']}\n"
+        text += f"ط§ظ†ظ‚ط¶ط§: {peer['expire']}\n"
+        text += f"IP ط¯ط§ط®ظ„غŒ: {peer['ip']}\n"
 
         if peer["endpoint"] != "-":
             text += f"Endpoint: {peer['endpoint']}\n"
 
-        text += "━━━━━━━━━━━━━━\n"
+        text += "â”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پ\n"
 
     return text[:3900]
 
@@ -2989,29 +2619,8 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         out = pretty_server_status()
     except Exception as e:
-        out = f"خطا:\n{e}"
+        out = f"ط®ط·ط§:\n{e}"
     await update.message.reply_text(out[:3900])
-
-
-async def license_request_watch_job(context: ContextTypes.DEFAULT_TYPE):
-    if not LICENSE_REQUIRED:
-        return
-    state = load_license_state()
-    if state.get("valid"):
-        return
-    try:
-        result = await asyncio.to_thread(check_request_remote, OWNER_ID)
-        if result.get("valid"):
-            await context.bot.send_message(
-                chat_id=OWNER_ID,
-                text=(
-                    "✅ لایسنس شما ساخته و فعال شد.\n\n"
-                    "پنل Noora AWG اکنون آماده استفاده است."
-                ),
-                reply_markup=main_keyboard(OWNER_ID),
-            )
-    except Exception as exc:
-        print("license request watch error:", exc)
 
 
 async def quota_job(context: ContextTypes.DEFAULT_TYPE):
@@ -3046,9 +2655,9 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
 
     app.job_queue.run_repeating(quota_job, interval=60, first=10)
-    app.job_queue.run_repeating(license_request_watch_job, interval=60, first=15)
     app.run_polling()
 
 
 if __name__ == "__main__":
     main()
+
